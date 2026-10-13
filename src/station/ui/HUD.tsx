@@ -53,10 +53,6 @@ export function StationHUD({ engine, state }: { engine: Engine; state: EngineSta
 
       {walking && (
         <nav className="st-dock" aria-label="Station">
-          <button onClick={() => engine.setMode('agent')}><img src="/brand/nansen-mark.gif" alt="" />Nansen AI <kbd>N</kbd></button>
-          <button onClick={() => engine.setMode('pc')}>▣ Research PC <kbd>P</kbd></button>
-          <button onClick={() => engine.setMode('shuttle')}>➤ Shuttle <kbd>B</kbd></button>
-          <button onClick={() => engine.setMode('telescope')}>✦ Telescope</button>
           <span className="st-rooms">
             {([['hangar', 'Hangar', '1'], ['research', 'Research room', '2'], ['observation', 'Observatory', '3']] as const).map(([r, label, k]) => (
               <button key={r} onClick={() => (engine as unknown as { travel: (r: string) => void }).travel(r)}>⇢ {label} <kbd>{k}</kbd></button>
