@@ -25,6 +25,9 @@ export const KIND: Record<StarKind, { color: string; name: string }> = {
 
 export type Focus = { type: 'planet'; index: number } | { type: 'star'; index: number } | null;
 
+/** A line drawn from the selected star to another star: a counterparty or a related wallet. */
+export interface Tie { star: number; kind: 'counterparty' | 'related'; weight: number }
+
 export interface FlightHud {
   speed: number;
   boost: boolean;
@@ -37,6 +40,8 @@ export interface GalaxyHandle { flyTo(f: Focus): void; setFlying(on: boolean): v
 interface Props {
   galaxy: Galaxy;
   focus: Focus;
+  /** Lines from the focused star to the wallets it deals with. */
+  ties?: Tie[];
   onHover: (f: Focus) => void;
   onSelect: (f: Focus) => void;
   onFlight?: (h: FlightHud | null) => void;
@@ -135,12 +140,12 @@ function orbitPos(o: Orbit, t: number, out: THREE.Vector3) {
   return out.set(o.center.x + x, o.center.y + y, o.center.z + z);
 }
 
-const GalaxyScene = forwardRef<GalaxyHandle, Props>(function GalaxyScene({ galaxy, focus, onHover, onSelect, onFlight }, ref) {
+const GalaxyScene = forwardRef<GalaxyHandle, Props>(function GalaxyScene({ galaxy, focus, ties, onHover, onSelect, onFlight }, ref) {
   const mount = useRef<HTMLDivElement>(null);
   const cb = useRef({ onHover, onSelect, onFlight });
   cb.current = { onHover, onSelect, onFlight };
-  const api = useRef<{ flyTo(f: Focus): void; setFocus(f: Focus): void; setFlying(on: boolean): void; scan(): void }>({
-    flyTo: () => {}, setFocus: () => {}, setFlying: () => {}, scan: () => {},
+  const api = useRef<{ flyTo(f: Focus): void; setFocus(f: Focus): void; setTies(t: Tie[]): void; setFlying(on: boolean): void; scan(): void }>({
+    flyTo: () => {}, setFocus: () => {}, setTies: () => {}, setFlying: () => {}, scan: () => {},
   });
   useImperativeHandle(ref, () => ({
     flyTo: (f) => api.current.flyTo(f),
@@ -149,6 +154,7 @@ const GalaxyScene = forwardRef<GalaxyHandle, Props>(function GalaxyScene({ galax
   }));
 
   useEffect(() => { api.current.setFocus(focus); }, [focus]);
+  useEffect(() => { api.current.setTies(ties ?? []); }, [ties]);
 
   useEffect(() => {
     const el = mount.current!;
@@ -370,6 +376,19 @@ const GalaxyScene = forwardRef<GalaxyHandle, Props>(function GalaxyScene({ galax
       (1 - t) * (1 - t) * va.x + 2 * (1 - t) * t * vm.x + t * t * vb.x,
       (1 - t) * (1 - t) * va.y + 2 * (1 - t) * t * vm.y + t * t * vb.y,
       (1 - t) * (1 - t) * va.z + 2 * (1 - t) * t * vm.z + t * t * vb.z);
+
+    // --- ties: glowing lines from the selected wallet to its counterparties
+    // (gold) and related wallets such as its first funder (cyan).
+    const TMAX = 40;
+    const tiePos = new Float32Array(TMAX * 6), tieCol = new Float32Array(TMAX * 6);
+    const tieGeo = new THREE.BufferGeometry();
+    tieGeo.setAttribute('position', new THREE.BufferAttribute(tiePos, 3));
+    tieGeo.setAttribute('color', new THREE.BufferAttribute(tieCol, 3));
+    const tieLines = new THREE.LineSegments(tieGeo, new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
+    tieLines.frustumCulled = false;
+    scene.add(tieLines);
+    let tieList: Tie[] = [];
+    api.current.setTies = (t) => { tieList = t.slice(0, TMAX); };
 
     // --- selection marker and fly-to.
     const markTex = (() => {
@@ -760,6 +779,21 @@ const GalaxyScene = forwardRef<GalaxyHandle, Props>(function GalaxyScene({ galax
         marker.visible = true;
         marker.material.opacity = 0.65 + Math.sin(time * 4) * 0.25;
       } else marker.visible = false;
+      // Ties follow both stars along their orbits, and pulse.
+      tieGeo.setDrawRange(0, focusNow?.type === 'star' ? tieList.length * 2 : 0);
+      if (focusNow?.type === 'star' && tieList.length) {
+        orbitPos(orbits[focusNow.index], time, va);
+        tieList.forEach((t, i) => {
+          orbitPos(orbits[t.star], time, vb);
+          tiePos.set([va.x, va.y, va.z, vb.x, vb.y, vb.z], i * 6);
+          const pulse = 0.55 + 0.45 * Math.sin(time * 3 - i * 0.7);
+          const w = (0.35 + t.weight * 0.65) * pulse;
+          const c = t.kind === 'related' ? [0.13, 0.83, 0.93] : [0.96, 0.77, 0.26];
+          tieCol.set([c[0] * w, c[1] * w, c[2] * w, c[0] * w * 0.5, c[1] * w * 0.5, c[2] * w * 0.5], i * 6);
+        });
+        tieGeo.attributes.position.needsUpdate = true;
+        tieGeo.attributes.color.needsUpdate = true;
+      }
       planetMats.forEach((m, i) => { m.uniforms.uPulse.value = focusNow?.type === 'planet' && focusNow.index === planetMeshes[i].userData.planet ? 0.8 : 0; });
 
       // Comets.

@@ -2,24 +2,13 @@
 
 import dynamic from 'next/dynamic';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { Galaxy, Planet, Star } from '@/lib/galaxy';
-import { KIND, type FlightHud, type Focus, type GalaxyHandle } from '@/components/GalaxyScene';
+import type { Galaxy } from '@/lib/galaxy';
+import type { TokenProfile, WalletProfile } from '@/lib/profile';
+import { PlanetView, StarView } from '@/components/Dossier';
+import { KIND, type FlightHud, type Focus, type GalaxyHandle, type Tie } from '@/components/GalaxyScene';
 
 const GalaxyScene = dynamic(() => import('@/components/GalaxyScene'), { ssr: false });
 
-const money = (x: number | null | undefined) => {
-  if (x == null) return '—';
-  const a = Math.abs(x);
-  const s = a >= 1e9 ? `$${(a / 1e9).toFixed(2)}B` : a >= 1e6 ? `$${(a / 1e6).toFixed(2)}M` : a >= 1e3 ? `$${(a / 1e3).toFixed(1)}k` : `$${a.toFixed(a < 10 ? 2 : 0)}`;
-  return x < 0 ? `−${s}` : s;
-};
-const signed = (x: number | null | undefined) => (x == null ? '—' : (x > 0 ? '+' : '') + money(x));
-const pct = (x: number | null | undefined) => (x == null ? '—' : `${x > 0 ? '+' : ''}${x.toFixed(1)}%`);
-const short = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
-const COHORT_NAME: Record<string, string> = {
-  smart_trader: 'Smart traders', whale: 'Whales', top_pnl: 'Top PnL traders',
-  public_figure: 'Public figures', exchange: 'Exchanges', fresh_wallets: 'Fresh wallets',
-};
 
 export default function Page() {
   const [galaxy, setGalaxy] = useState<Galaxy | null>(null);
@@ -31,6 +20,9 @@ export default function Page() {
   const [flying, setFlying] = useState(false);
   const [hud, setHud] = useState<FlightHud | null>(null);
   const scene = useRef<GalaxyHandle>(null);
+  // Deep dossiers, keyed by address. undefined = loading, null = failed.
+  const [wallets, setWallets] = useState<Record<string, WalletProfile | null | undefined>>({});
+  const [tokens, setTokens] = useState<Record<string, TokenProfile | null | undefined>>({});
 
   useEffect(() => {
     fetch('/api/galaxy').then(async (r) => {
@@ -80,9 +72,40 @@ export default function Page() {
 
   const shown = selected ?? hover;
 
+  const starIndex = useMemo(() => new Map((galaxy?.stars ?? []).map((s, i) => [s.address, i])), [galaxy]);
+  const planetIndex = useMemo(() => new Map((galaxy?.planets ?? []).map((p, i) => [p.address, i])), [galaxy]);
+
+  // Scan what the player selects (never what they merely hover: each scan costs credits).
+  const selAddr = galaxy && selected ? (selected.type === 'star' ? galaxy.stars[selected.index].address : galaxy.planets[selected.index].address) : null;
+  useEffect(() => {
+    if (!selAddr || !selected) return;
+    if (selected.type === 'star') {
+      if (selAddr in wallets) return;
+      setWallets((w) => ({ ...w, [selAddr]: undefined }));
+      fetch(`/api/wallet/${selAddr}`).then((r) => r.ok ? r.json() : null).then((j) => setWallets((w) => ({ ...w, [selAddr]: j }))).catch(() => setWallets((w) => ({ ...w, [selAddr]: null })));
+    } else {
+      if (selAddr in tokens) return;
+      setTokens((t) => ({ ...t, [selAddr]: undefined }));
+      fetch(`/api/token/${selAddr}`).then((r) => r.ok ? r.json() : null).then((j) => setTokens((t) => ({ ...t, [selAddr]: j }))).catch(() => setTokens((t) => ({ ...t, [selAddr]: null })));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selAddr]);
+
+  // Lines in the galaxy from the selected wallet to the wallets it deals with.
+  const ties = useMemo<Tie[]>(() => {
+    if (selected?.type !== 'star' || !selAddr) return [];
+    const w = wallets[selAddr];
+    if (!w) return [];
+    const maxV = Math.max(1, ...w.counterparties.map((c) => c.volumeUsd));
+    const out: Tie[] = [];
+    for (const r of w.related) { const i = starIndex.get(r.address); if (i != null) out.push({ star: i, kind: 'related', weight: 1 }); }
+    for (const c of w.counterparties) { const i = starIndex.get(c.address); if (i != null && i !== selected.index) out.push({ star: i, kind: 'counterparty', weight: Math.sqrt(c.volumeUsd / maxV) }); }
+    return out;
+  }, [selected, selAddr, wallets, starIndex]);
+
   return (
     <main>
-      {galaxy && <GalaxyScene ref={scene} galaxy={galaxy} focus={selected ?? hover} onHover={setHover} onSelect={select} onFlight={setHud} />}
+      {galaxy && <GalaxyScene ref={scene} galaxy={galaxy} focus={selected ?? hover} onHover={setHover} onSelect={select} onFlight={setHud} ties={ties} />}
 
       <header className={`title ${introDone ? 'small' : ''}`}>
         <h1>MONAD<span>CONSTELLATION</span></h1>
@@ -111,8 +134,11 @@ export default function Page() {
           {shown && (
             <aside className="dossier" key={`${shown.type}${shown.index}`}>
               {shown.type === 'planet'
-                ? <PlanetView p={galaxy.planets[shown.index]} galaxy={galaxy} onStar={(i) => select({ type: 'star', index: i })} />
-                : <StarView s={galaxy.stars[shown.index]} galaxy={galaxy} onPlanet={(i) => select({ type: 'planet', index: i })} />}
+                ? <PlanetView p={galaxy.planets[shown.index]} galaxy={galaxy} token={tokens[galaxy.planets[shown.index].address]} onStar={(i) => select({ type: 'star', index: i })} />
+                : <StarView s={galaxy.stars[shown.index]} galaxy={galaxy} wallet={wallets[galaxy.stars[shown.index].address]}
+                    deep={!!selected && selected.type === 'star' && selected.index === shown.index}
+                    starIndex={starIndex} planetIndex={planetIndex}
+                    onPlanet={(i) => select({ type: 'planet', index: i })} onStar={(i) => select({ type: 'star', index: i })} />}
               {selected && <button className="close" onClick={() => select(null)} aria-label="Back to the galaxy">✕</button>}
             </aside>
           )}
@@ -167,108 +193,5 @@ export default function Page() {
         </>
       )}
     </main>
-  );
-}
-
-function PlanetView({ p, galaxy, onStar }: { p: Planet; galaxy: Galaxy; onStar: (i: number) => void }) {
-  const pi = galaxy.planets.indexOf(p);
-  const orbiting = useMemo(() => galaxy.stars
-    .map((s, i) => ({ s, i, l: s.links.find((l) => l.p === pi) }))
-    .filter((x) => x.l)
-    .sort((a, b) => (b.l!.pnlUsd ?? -Infinity) - (a.l!.pnlUsd ?? -Infinity))
-    .slice(0, 6), [galaxy, pi]);
-  const topIndex = p.topPnl ? galaxy.stars.findIndex((s) => s.address === p.topPnl!.address) : -1;
-  const max = Math.max(1, ...p.cohorts.map((c) => Math.abs(c.netFlowUsd)));
-  return (
-    <>
-      <span className="eyebrow">Planet · Monad token</span>
-      <h2>${p.symbol}</h2>
-      <div className="tags">
-        {p.capGroup && <span className="tag">Nansen {p.capGroup}</span>}
-        {p.smartHolders > 0 && <span className="tag gold">{p.smartHolders} smart money holder{p.smartHolders > 1 ? 's' : ''} · {money(p.smartValueUsd)}</span>}
-        {p.state === 'falling' && <span className="tag red">down {Math.round(-(p.change7d ?? 0))}% this week</span>}
-        {p.state === 'flagged' && <span className="tag red">flagged by Nansen</span>}
-      </div>
-      <dl>
-        <dt>Market cap</dt><dd>{money(p.marketCap)}</dd>
-        <dt>Liquidity</dt><dd>{money(p.liquidity)}</dd>
-        <dt>24h volume</dt><dd>{money(p.volume24h)}</dd>
-        <dt>24h netflow</dt><dd className={(p.netflow24h ?? 0) >= 0 ? 'up' : 'down'}>{signed(p.netflow24h)}</dd>
-        <dt>Price 24h · 7d</dt><dd>{pct(p.change24h)} · {pct(p.change7d)}</dd>
-        <dt>Orbiting wallets</dt><dd>{p.holders} holders · {p.traders24h} traders today</dd>
-      </dl>
-      {p.cohorts.length > 0 && (
-        <>
-          <h4>Who moved money, 24h <small>tgm/flow-intelligence</small></h4>
-          <ul className="cohorts">
-            {p.cohorts.map((c) => (
-              <li key={c.key}>
-                <span>{COHORT_NAME[c.key]}{c.wallets ? ` · ${c.wallets}` : ''}</span>
-                <span className="bar"><i className={c.netFlowUsd >= 0 ? 'in' : 'out'} style={{ width: `${(Math.abs(c.netFlowUsd) / max) * 100}%` }} /></span>
-                <b className={c.netFlowUsd > 0 ? 'up' : c.netFlowUsd < 0 ? 'down' : ''}>{c.netFlowUsd ? signed(c.netFlowUsd) : '0'}</b>
-              </li>
-            ))}
-          </ul>
-        </>
-      )}
-      {(p.risk.length > 0 || p.reward.length > 0) && (
-        <>
-          <h4>Nansen indicators <small>tgm/indicators</small></h4>
-          <div className="tags">
-            {p.risk.map((r) => <span key={r.type} className={`tag ${r.score === 'high' ? 'red' : ''}`}>risk · {r.type.replace(/-/g, ' ')}: {r.score}</span>)}
-            {p.reward.map((r) => <span key={r.type} className={`tag ${r.score === 'high' ? 'green' : ''}`}>reward · {r.type.replace(/-/g, ' ')}: {r.score}</span>)}
-          </div>
-        </>
-      )}
-      <h4>Brightest traders here <small>tgm/pnl-leaderboard, 30d</small></h4>
-      <ul className="people">
-        {orbiting.map(({ s, i, l }) => (
-          <li key={s.address}><button onClick={() => onStar(i)}>
-            <i style={{ background: KIND[s.kind].color }} /><span>{s.name}</span>
-            <b className={(l!.pnlUsd ?? 0) >= 0 ? 'up' : 'down'}>{l!.pnlUsd != null ? signed(l!.pnlUsd) : money(l!.holdingUsd)}</b>
-          </button></li>
-        ))}
-      </ul>
-      {topIndex >= 0 && <button className="link" onClick={() => onStar(topIndex)}>Fly to the top trader ({signed(p.topPnl!.pnlUsd)}) →</button>}
-    </>
-  );
-}
-
-function StarView({ s, galaxy, onPlanet }: { s: Star; galaxy: Galaxy; onPlanet: (i: number) => void }) {
-  const links = [...s.links].sort((a, b) => (b.holdingUsd + Math.abs(b.pnlUsd ?? 0)) - (a.holdingUsd + Math.abs(a.pnlUsd ?? 0)));
-  const sent = galaxy.trails.filter((t) => galaxy.stars[t.from] === s).length;
-  const received = galaxy.trails.filter((t) => galaxy.stars[t.to] === s).length;
-  return (
-    <>
-      <span className="eyebrow" style={{ color: KIND[s.kind].color }}>Star · {KIND[s.kind].name}</span>
-      <h2 className="wallet">{s.name}</h2>
-      <a className="addr" href={`https://app.nansen.ai/profiler?address=${s.address}&chain=monad`} target="_blank" rel="noreferrer">{short(s.address)} · open in Nansen ↗</a>
-      {s.labels.length > 0 && <div className="tags">{[...new Set(s.labels)].slice(0, 6).map((l) => <span key={l} className="tag">{l}</span>)}</div>}
-      <div className="meter"><span>Brightness</span><span className="bar"><i style={{ width: `${s.brightness * 100}%`, background: KIND[s.kind].color }} /></span><b>{Math.round(s.brightness * 100)}</b></div>
-      <dl>
-        <dt>Realised + open PnL</dt><dd className={s.pnlUsd >= 0 ? 'up' : 'down'}>{s.pnlUsd ? signed(s.pnlUsd) : '—'}</dd>
-        <dt>Holdings in view</dt><dd>{money(s.holdingUsd)}</dd>
-        <dt>Traded today</dt><dd>{money(s.volume24hUsd)}</dd>
-        <dt>Transfers in view</dt><dd>{sent} sent · {received} received</dd>
-      </dl>
-      <h4>Orbits <small>holders · pnl-leaderboard · who-bought-sold</small></h4>
-      <ul className="people">
-        {links.map((l) => {
-          const p = galaxy.planets[l.p];
-          return (
-            <li key={l.p}><button onClick={() => onPlanet(l.p)}>
-              <i style={{ background: p.smartHolders ? '#f5c542' : '#8b7cf6' }} /><span>${p.symbol}</span>
-              <em>
-                {l.share > 0 && `${(l.share * 100).toFixed(2)}% of supply · `}
-                {l.holdingUsd > 0 && `${money(l.holdingUsd)} · `}
-                {l.trades != null && `${l.trades} trades · `}
-                {l.boughtUsd + l.soldUsd > 0 && `24h ${money(l.boughtUsd)} in / ${money(l.soldUsd)} out`}
-              </em>
-              {l.pnlUsd != null && <b className={l.pnlUsd >= 0 ? 'up' : 'down'}>{signed(l.pnlUsd)}{l.roi != null && <small> {Math.round(l.roi * 100)}%</small>}</b>}
-            </button></li>
-          );
-        })}
-      </ul>
-    </>
   );
 }
