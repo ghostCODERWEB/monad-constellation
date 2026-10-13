@@ -9,7 +9,7 @@
 import * as THREE from 'three';
 import { buildMoon, buildSun, buildWorld, type World } from '@/components/worlds';
 import type { WorldStyle } from '@/lib/worldStyle';
-import { buildMonadField, type MonadField } from './monadField';
+import { buildGalaxyField, type GalaxyField } from './galaxyField';
 
 export const EARTH_R = 6371;
 export const ALTITUDE = 420;
@@ -39,7 +39,7 @@ export interface Sky {
   earthPivot: THREE.Group;
   moon: THREE.Mesh;
   /** The distant Monad universe, fixed in the station frame, in view through the observation room's great window. */
-  monad: MonadField;
+  monad: GalaxyField;
   sun: ReturnType<typeof buildSun>;
   sunPos: { value: THREE.Vector3 };
   /** Unit vector from the station toward the Sun, in station space. */
@@ -89,7 +89,7 @@ export function buildSky(): Sky {
   scene.add(inertial);
   inertial.add(new THREE.Points(sg, new THREE.PointsMaterial({ size: 1.8, sizeAttenuation: false, vertexColors: true, map: soft(), transparent: true, depthWrite: false })));
 
-  const monad = buildMonadField(800_000);
+  const monad = buildGalaxyField(120_000);
   scene.add(monad.group);
 
   // Sun and Moon: placed to show their true apparent sizes (about half a degree).
@@ -140,6 +140,7 @@ export function buildSky(): Sky {
       for (const m of [earth.surfaceMat, earth.cloudMat]) m.uniforms.uTime.value = t;
       earth.atmoMat.side = THREE.FrontSide;
       sun.mat.uniforms.uTime.value = t;
+      monad.update(t);
       camera.quaternion.copy(camQuat);
       camera.aspect = aspect;
       camera.fov = fov;

@@ -144,6 +144,7 @@ export function installHangar(e: Engine) {
     hangarLeft.position.x = -doorX - 5.5; hangarRight.position.x = doorX + 5.5;
     e.walker.pos.copy(bay.localToWorld(new THREE.Vector3(0, 0.4, -6.0)));
     e.walker.quat.setFromEuler(new THREE.Euler(-0.08, Math.PI / 2, 0)); // looking into the bay (world −x)
+    e.walker.yaw = Math.PI / 2; e.walker.pitch = -0.08;
     window.history.replaceState(null, '', '/');
   }
   const parked = ship.group.position.clone();

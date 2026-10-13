@@ -5,6 +5,7 @@
 // key or Esc cancels it and hands control straight back.
 import * as THREE from 'three';
 import type { Engine } from '../engine';
+import { EYE_HEIGHT } from '../modes/walker';
 
 const V = (x: number, y: number, z: number) => new THREE.Vector3(x, y, z);
 
@@ -68,6 +69,7 @@ export function installTravel(e: Engine) {
     go.s += dir * Math.min(remaining, speed * dt);
     go.lift.multiplyScalar(Math.exp(-3 * dt));
     w.pos.copy(at(go.s)).add(go.lift);
+    if (w.moveMode === 'walk') w.pos.y = e.station.groundAt(w.pos.x, w.pos.z) + EYE_HEIGHT; // walking: stay on the floor
     w.vel.set(0, 0, 0);
     // Look along the flight, turning to the destination's view as it arrives.
     const ahead = at(go.s + dir * 1.5).sub(w.pos);
@@ -77,6 +79,7 @@ export function installTravel(e: Engine) {
     m.lookAt(V(0, 0, 0), f, V(0, 1, 0));
     look.setFromRotationMatrix(m);
     w.quat.slerp(look, 1 - Math.exp(-5 * dt));
+    { const eu = new THREE.Euler().setFromQuaternion(w.quat, 'YXZ'); w.yaw = eu.y; w.pitch = eu.x; } // keep walking in step with the view
     if (remaining < 0.02) go = null;
   });
 }

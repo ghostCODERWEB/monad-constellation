@@ -199,3 +199,12 @@
 .shuttle.launching > header { display: none; }
 .shuttle.launching .shuttle-launch { flex: none; gap: 4px; }
 .shuttle.launching .shuttle-launch b { font: 700 28px 'Space Grotesk', system-ui; }
+
+/* Movement and camera switches: a labelled two-way toggle each. */
+.st-seg { display: flex; align-items: center; gap: 4px; padding: 4px 6px 4px 12px; border-radius: 999px; background: rgba(10,7,24,0.62); border: 1px solid rgba(160,140,255,0.3); backdrop-filter: blur(8px); pointer-events: auto; }
+.st-seg > span { font: 600 10px Inter, system-ui, sans-serif; letter-spacing: 0.08em; text-transform: uppercase; color: #a79bd8; margin-right: 4px; }
+.st-dock .st-seg button { padding: 6px 11px; border: 0; background: transparent; color: #cfc8ee; font: 600 12px Inter, system-ui, sans-serif; border-radius: 999px; backdrop-filter: none; }
+.st-dock .st-seg button.on { background: #836ef9; color: #fff; }
+.st-dock .st-seg button:first-child { border: 0; color: inherit; }
+.st-dock .st-seg button.on:first-child { color: #fff; }
+.st-seg kbd { font-size: 10px; margin-left: 4px; }

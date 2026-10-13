@@ -10,7 +10,7 @@ import { NOISE, buildWorld, buildMoon, type World } from '@/components/worlds';
 import { worldStyle } from '@/lib/worldStyle';
 import { moonsOf } from '@/lib/moons';
 import type { Galaxy } from '@/lib/galaxy';
-import { monadDirection } from './monadField';
+import type { FieldWorld } from './galaxyField';
 
 export type TargetKind = 'token' | 'planet' | 'star' | 'nebula' | 'dark-nebula' | 'open-cluster' | 'globular' | 'spiral' | 'elliptical'
   | 'interacting' | 'group' | 'cluster' | 'deep-field' | 'black-hole' | 'remnant' | 'earth' | 'moon' | 'sun';
@@ -346,8 +346,8 @@ const RING_FS = /* glsl */ `
   }`;
 
 export interface Cosmos {
-  /** Adds the Monad token worlds from the galaxy data; returns their catalog entries. */
-  addTokens(galaxy: Galaxy): Target[];
+  /** Catalog entries for the Monad token worlds, which the station sky already draws (world placement comes from the galaxy field). */
+  addTokens(galaxy: Galaxy, placed: FieldWorld[]): Target[];
   scene: THREE.Scene;
   /** Rotates with the inertial frame; everything on the sky is a child. */
   sky: THREE.Group;
@@ -523,38 +523,17 @@ export function buildCosmos(): Cosmos {
   const worlds: World[] = [];
   const money = (x: number | null) => x == null ? 'n/a' : x >= 1e9 ? `$${(x / 1e9).toFixed(2)}B` : x >= 1e6 ? `$${(x / 1e6).toFixed(2)}M` : x >= 1e3 ? `$${(x / 1e3).toFixed(1)}k` : `$${Math.round(x)}`;
 
-  const addTokens = (galaxy: Galaxy): Target[] => {
+  const addTokens = (galaxy: Galaxy, placed: FieldWorld[]): Target[] => {
     const out: Target[] = [];
-    const order = galaxy.planets.map((_, i) => i).sort((a, b) => (galaxy.planets[b].marketCap ?? 0) - (galaxy.planets[a].marketCap ?? 0));
-    order.forEach((pi, k) => {
-      const p = galaxy.planets[pi];
+    for (const fw of placed) {
+      const p = galaxy.planets[fw.index];
       const style = worldStyle(p);
-      // The Monad universe hangs in the great window's direction, fixed in the station frame
-      // (see monadField.ts); the biggest markets sit nearest its heart.
-      const v = monadDirection(k, order.length);
-      const lat = THREE.MathUtils.radToDeg(Math.asin(v.y));
-      const lon = THREE.MathUtils.radToDeg(Math.atan2(-v.z, v.x));
-      const arcsec = 20 + 18 * Math.max(0, Math.log10(Math.max(1e4, p.marketCap ?? 1e4) / 1e4));
-      const size = arcsec / 3600;
-      const dir = dirOf(lon, lat);
-      const R = D * Math.tan(THREE.MathUtils.degToRad(size) / 2);
-      const center = dir.clone().multiplyScalar(D);
-      const w = buildWorld(style, R, center, sunPos, p.smartHolders > 0);
-      w.group.userData.target = `token-${p.address}`;
-      fixed.add(w.group);
-      // buildWorld bakes its centre for the shaders; it moves with the sky, so keep those in sync per frame.
-      worlds.push(w);
-      // Moons: the token's biggest real holders.
-      const right = new THREE.Vector3().crossVectors(dir, new THREE.Vector3(0, 1, 0)).normalize();
-      moonsOf(galaxy, pi).forEach((m, j) => {
-        const moon = buildMoon(R * Math.min(0.26, 0.07 + Math.sqrt(m.share) * 0.45), '#c8c8d0', j * 13 + pi, sunPos);
-        moon.position.copy(right).multiplyScalar(R * (2.9 + j * 1.2) * (j % 2 ? -1 : 1));
-        w.group.add(moon);
-      });
+      const lat = THREE.MathUtils.radToDeg(Math.asin(fw.dir.y));
+      const lon = THREE.MathUtils.radToDeg(Math.atan2(-fw.dir.z, fw.dir.x));
       const target: Target = {
-        id: `token-${p.address}`, name: `$${p.symbol}`, kind: 'token', lon, lat, size,
+        id: `token-${p.address}`, name: `$${p.symbol}`, kind: 'token', lon, lat, size: fw.sizeDeg,
         distance: `Monad universe · ${style.biomeName} · far beyond the station`, focus: 0.62,
-        token: { address: p.address, symbol: p.symbol, planet: pi },
+        token: { address: p.address, symbol: p.symbol, planet: fw.index },
         facts: [
           `${style.biomeName}: ${style.why}`,
           `Market cap ${money(p.marketCap)} · liquidity ${money(p.liquidity)} · ${p.holders} holders in view (Nansen).`,
@@ -563,8 +542,7 @@ export function buildCosmos(): Cosmos {
         ],
       };
       out.push(target);
-      targets.push({ t: target, obj: w.group, dir });
-    });
+    }
     return out;
   };
 

@@ -13,7 +13,7 @@ import { MissionLog } from './core/log';
 import { Bodies } from './core/bodies';
 import { buildStation, type Station } from './world/station';
 import { buildSky, type Sky } from './world/sky';
-import { animateHands, buildHands, createWalker, stepWalker, type Walker } from './modes/walker';
+import { animateHands, buildHands, createWalker, setMoveMode, stepWalker, type MoveMode, type ViewMode, type Walker } from './modes/walker';
 
 export interface Mode {
   id: string;
@@ -39,6 +39,8 @@ export interface EngineState {
   zone: string | null;
   speed: number;
   assist: boolean;
+  moveMode: MoveMode;
+  view: ViewMode;
   gripping: boolean;
   holding: string | null;
   locked: boolean;
@@ -182,10 +184,11 @@ export class Engine {
       pushOff: () => this.sfx?.('push'),
       grab: () => this.sfx?.('grab'),
       bump: (s) => this.sfx?.('bump', s),
-    });
+    }, this.station.groundAt);
     this.camera.position.copy(w.pos);
     this.camera.quaternion.copy(w.quat);
-    this.hands.group.visible = true;
+    if (w.view === 'third') this.chaseCamera(w);
+    this.hands.group.visible = w.view === 'first';
     animateHands(this.hands, w, t);
     const look = new THREE.Vector3(0, 0, -1).applyQuaternion(w.quat);
     this.focus = this.interactions.focus(w.pos, look);
@@ -197,6 +200,32 @@ export class Engine {
         if (to.dot(look) > 0.8) { b.noticed = true; b.onNotice(); }
       }
     }
+  }
+
+  /** Walk or drift. */
+  setMoveMode(m: MoveMode) {
+    if (this.walker.moveMode === m) return;
+    setMoveMode(this.walker, m);
+    this.say(m === 'walk' ? 'Walking: feet on the floor' : 'Floating: zero gravity', 2.2);
+    this.emit(true);
+  }
+
+  /** First person or third person. */
+  setView(v: ViewMode) {
+    if (this.walker.view === v) return;
+    this.walker.view = v;
+    this.emit(true);
+  }
+
+  /** Third person: the camera trails the astronaut and pulls in rather than pass through a wall. */
+  private chaseCamera(w: Walker) {
+    const back = new THREE.Vector3(0, 0, 1).applyQuaternion(w.quat);
+    const cand = new THREE.Vector3();
+    for (let d = 2.9; d >= 0.45; d -= 0.25) {
+      cand.copy(w.pos).addScaledVector(back, d).y += 0.35 * (d / 2.9);
+      if (this.station.space.contains(cand, 0.1)) break;
+    }
+    this.camera.position.copy(cand);
   }
 
   /** Sound hook, installed by the audio module. */
@@ -223,11 +252,13 @@ export class Engine {
     const s: EngineState = {
       subject: this.subject,
       mode: this.mode.id,
-      modeTitle: this.mode.title,
+      modeTitle: this.mode.id === 'walk' ? (w.moveMode === 'walk' ? 'Walking' : 'Zero-g') : this.mode.title,
       prompt: this.mode.id === 'walk' && this.focus ? `Press E to ${Interactions.text(this.focus)}` : null,
       zone: this.station.space.zoneOf(w.pos),
       speed: w.vel.length(),
       assist: w.assist,
+      moveMode: w.moveMode,
+      view: w.view,
       gripping: !!w.grip,
       holding: w.holding?.name ?? null,
       locked: this.input.locked,

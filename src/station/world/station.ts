@@ -36,6 +36,8 @@ export interface Station {
   /** Spots where props can be placed (wall position + inward normal). */
   wallSpots: { zone: string; pos: THREE.Vector3; normal: THREE.Vector3 }[];
   glass: THREE.Material;
+  /** Floor height under a point (world x, z), for walking: ramps and steps between the rooms, the hangar gangway and cradle. */
+  groundAt(x: number, z: number): number;
 }
 
 const V = (x: number, y: number, z: number) => new THREE.Vector3(x, y, z);
@@ -504,6 +506,23 @@ export function buildStation(): Station {
   bay.updateMatrix();
   interior.add(bay);
   const bayToWorld = (v: THREE.Vector3) => v.clone().applyMatrix4(bay.matrix);
+  // Gangway from the walkway sill down into the hangar: a diamond-plate ramp with handrails on both sides.
+  {
+    const dx = 7.3, dy = 2.9, len = Math.hypot(dx, dy), ang = Math.atan2(dy, dx);
+    const ramp = new THREE.Mesh(scaleUV(new THREE.BoxGeometry(len, 0.08, 1.3), len / 0.8, 1.6), hubFloor);
+    ramp.position.set(0.4 - dx / 2, -1.05 - dy / 2 - 0.04, 0);
+    ramp.rotation.z = ang;
+    add(ramp);
+    for (const sz of [-1, 1]) {
+      const rail = new THREE.Mesh(scaleUV(new THREE.CylinderGeometry(0.022, 0.022, len, 24), 1, len * 3), hubRail);
+      rail.rotation.z = Math.PI / 2 + ang; rail.position.set(0.4 - dx / 2, -1.05 - dy / 2 + 0.95, sz * 0.68); add(rail);
+      for (let t = 0; t <= 1.001; t += 0.2) {
+        const post = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, 0.95, 12), hubFrame);
+        post.position.set(0.4 - dx * t, -1.05 - dy * t + 0.47, sz * 0.68); add(post);
+      }
+      rails.push({ a: V(0.4, -0.1, sz * 0.68), b: V(0.4 - dx, -0.1 - dy, sz * 0.68) });
+    }
+  }
   target = bay;
   const HG = { x: 6, y: 4, z0: -22, z1: -5.2 };
   space.add(box('Hangar', 'Hangar', [HG.z0 + 5.6, -HG.y, -HG.x], [HG.z1 + 5.6, HG.y, HG.x]));
@@ -688,6 +707,21 @@ export function buildStation(): Station {
     hull.add(extPatch);
   }
 
+  // Floor heights for walking. Each room has its own floor; the hatches blend between them, the hangar
+  // is reached down a gangway from the walkway, and the shuttle's cradle stands on the deck.
+  const mix = (a: number, b: number, x0: number, x1: number, x: number) => a + (b - a) * THREE.MathUtils.smoothstep(x, x0, x1);
+  const groundAt = (x: number, z: number) => {
+    if (x < 0.4) {
+      // Hangar. The gangway runs from the walkway sill down to the deck along z ≈ 0.
+      if (Math.abs(z) < 0.66 && x > -6.9) return mix(-3.95, -1.05, -6.9, 0.4, x);
+      if (x > -7.5 && x < -4.3 && Math.abs(z) < 3) return -3.72; // the cradle
+      return -4.0;
+    }
+    if (x < 2.8) return mix(-1.05, -1.5, 2.3, 3.3, x);   // walkway into the research room
+    if (x < 11.4) return mix(-1.5, -1.5, 0, 1, 0) + mix(0, -0.7, 10.6, 12.2, x); // research room, then down into the observatory
+    return -2.2;
+  };
+
   const anchors: Anchors = {
     spawn: V(5.0, 0.1, 0.5),
     telescopeBase: V(15.4, -0.7, 0),
@@ -699,7 +733,7 @@ export function buildStation(): Station {
   };
 
   return {
-    interior, exterior, space, rails, anchors, wallSpots, glass,
+    interior, exterior, space, rails, anchors, wallSpots, glass, groundAt,
     doors: { hangarLeft, hangarRight },
     hull,
   };

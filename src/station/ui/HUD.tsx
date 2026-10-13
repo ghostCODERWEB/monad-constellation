@@ -34,7 +34,7 @@ export function StationHUD({ engine, state }: { engine: Engine; state: EngineSta
 
       {walking && <div className="st-status">
         <b>{state.zone ?? 'Outside'}</b>
-        <span>{state.modeTitle}{walking ? ` · ${state.speed.toFixed(2)} m/s · assist ${state.assist ? 'on' : 'off'}` : ''}</span>
+        <span>{state.modeTitle}{walking ? ` · ${state.speed.toFixed(2)} m/s${state.moveMode === 'float' ? ` · assist ${state.assist ? 'on' : 'off'}` : ''}` : ''}</span>
         <span className="st-sun">{state.sunlit > 0.5 ? '☀ orbital day' : '☾ orbital night'}</span>
         {state.gripping && <span className="st-chip">holding rail</span>}
         {state.holding && <span className="st-chip">holding {state.holding}</span>}
@@ -53,6 +53,18 @@ export function StationHUD({ engine, state }: { engine: Engine; state: EngineSta
 
       {walking && (
         <nav className="st-dock" aria-label="Station">
+          <div className="st-seg" role="group" aria-label="Movement">
+            <span>Movement</span>
+            <button className={state.moveMode === 'walk' ? 'on' : ''} onClick={() => engine.setMoveMode('walk')} title="Feet on the floor (M)">Walk</button>
+            <button className={state.moveMode === 'float' ? 'on' : ''} onClick={() => engine.setMoveMode('float')} title="Zero gravity (M)">Float</button>
+            <kbd>M</kbd>
+          </div>
+          <div className="st-seg" role="group" aria-label="Camera">
+            <span>Camera</span>
+            <button className={state.view === 'first' ? 'on' : ''} onClick={() => engine.setView('first')}>First person</button>
+            <button className={state.view === 'third' ? 'on' : ''} onClick={() => engine.setView('third')}>Third person</button>
+            <kbd>Tab</kbd>
+          </div>
           <span className="st-rooms">
             {([['hangar', 'Hangar', '1'], ['research', 'Research room', '2'], ['observation', 'Observatory', '3']] as const).map(([r, label, k]) => (
               <button key={r} onClick={() => (engine as unknown as { travel: (r: string) => void }).travel(r)}>⇢ {label} <kbd>{k}</kbd></button>
@@ -67,12 +79,22 @@ export function StationHUD({ engine, state }: { engine: Engine; state: EngineSta
 
       {walking && help && (
         <ul className="st-help">
-          <li><kbd>W A S D</kbd> drift · <kbd>Space</kbd>/<kbd>Ctrl</kbd> up/down</li>
-          <li><kbd>Shift</kbd> push off a wall · <kbd>G</kbd> grab rail or object</li>
-          <li>click throw · <kbd>X</kbd> brake · <kbd>Q</kbd>/<kbd>R</kbd> roll</li>
-          <li><kbd>V</kbd> stabiliser assist · <kbd>E</kbd> use · <kbd>L</kbd> mission log</li>
-          <li><kbd>N</kbd> Nansen AI · <kbd>P</kbd> research PC · <kbd>B</kbd> shuttle</li>
-          <li><kbd>Esc</kbd> leaves any mode · <kbd>H</kbd> hide</li>
+          {state.moveMode === 'walk' ? (
+            <>
+              <li><kbd>W A S D</kbd> walk · <kbd>Shift</kbd> run · mouse look</li>
+              <li><kbd>M</kbd> switch to floating · <kbd>Tab</kbd> first / third person</li>
+              <li><kbd>G</kbd> pick up · click throw · <kbd>E</kbd> use</li>
+            </>
+          ) : (
+            <>
+              <li><kbd>W A S D</kbd> drift · <kbd>Space</kbd>/<kbd>Ctrl</kbd> up/down</li>
+              <li><kbd>Shift</kbd> push off a wall · <kbd>G</kbd> grab rail or object</li>
+              <li>click throw · <kbd>X</kbd> brake · <kbd>Q</kbd>/<kbd>R</kbd> roll · <kbd>V</kbd> assist</li>
+              <li><kbd>M</kbd> switch to walking · <kbd>Tab</kbd> first / third person</li>
+            </>
+          )}
+          <li><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd> autopilot to a room · <kbd>L</kbd> mission log</li>
+          <li><kbd>N</kbd> Nansen AI · <kbd>P</kbd> research PC · <kbd>B</kbd> shuttle · <kbd>Esc</kbd> back · <kbd>H</kbd> hide</li>
         </ul>
       )}
 
