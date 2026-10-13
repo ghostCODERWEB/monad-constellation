@@ -75,7 +75,7 @@ export interface Galaxy {
 
 const STABLE = /usd|^eur|^gho$|^dai$|^frax/i;
 const EXCHANGES = /binance|coinbase|okx|bybit|kraken|bitget|gate\.io|mexc|kucoin|htx|huobi|crypto\.com|upbit|bithumb/i;
-const PLANETS = 18;
+const PLANETS = 28;
 
 export function kindOf(labels: string[], usd: number, smart: boolean): StarKind {
   const all = labels.join(' | ');

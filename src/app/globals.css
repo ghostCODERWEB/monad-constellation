@@ -233,3 +233,33 @@ kbd {
 .txs b { color: #c4b5fd; text-transform: capitalize; }
 .txs span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .txs em { grid-column: 2; font-style: normal; color: var(--muted); font-size: 11px; }
+
+/* --- worlds -------------------------------------------------------------- */
+.plabel.sun { border-color: rgba(255, 214, 140, 0.6); }
+.plabel.sun b { color: #ffe3a3; }
+.mlabel {
+  display: flex; align-items: center; gap: 6px; padding: 3px 9px; border-radius: 999px; font-size: 11px; white-space: nowrap;
+  background: rgba(8, 5, 20, 0.62); border: 1px solid rgba(200, 200, 230, 0.28); backdrop-filter: blur(5px); pointer-events: none;
+}
+.mlabel i { width: 7px; height: 7px; border-radius: 50%; }
+.mlabel b { font-weight: 600; }
+.mlabel span { color: var(--muted); }
+
+.survey { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; font-size: 12px; }
+.survey li { display: grid; gap: 2px; padding: 8px 10px; border-radius: 12px; background: rgba(255, 255, 255, 0.03); border: 1px solid var(--line); }
+.survey b { font-size: 13px; }
+.survey span { color: var(--muted); line-height: 1.4; }
+
+.expedition {
+  position: absolute; left: 18px; top: 80px; width: 250px; pointer-events: auto;
+  padding: 14px 16px; border-radius: 16px; background: var(--glass); border: 1px solid rgba(245, 197, 66, 0.4);
+  backdrop-filter: blur(12px); display: grid; gap: 2px;
+}
+.expedition > b { font-family: 'Space Grotesk', sans-serif; font-size: 24px; }
+.expedition .biome { font-size: 12px; color: var(--gold); }
+.expedition dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 10px 0 6px; font-size: 12px; }
+.expedition dt { color: var(--muted); }
+.expedition dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+.expedition p { margin: 0 0 10px; font-size: 12px; color: var(--muted); line-height: 1.4; }
+.survey-btn { padding: 8px 12px; border-radius: 10px; background: rgba(245, 197, 66, 0.16); border: 1px solid rgba(245, 197, 66, 0.5); color: var(--gold); font-size: 12px; font-weight: 600; }
+@media (max-width: 760px) { .expedition { top: 120px; width: auto; right: 16px; } }

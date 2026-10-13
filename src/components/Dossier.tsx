@@ -4,6 +4,8 @@ import { useMemo } from 'react';
 import type { Galaxy, Planet, Star } from '@/lib/galaxy';
 import type { TokenProfile, WalletProfile } from '@/lib/profile';
 import { KIND } from './GalaxyScene';
+import { worldStyle } from '@/lib/worldStyle';
+import { moonsOf } from '@/lib/moons';
 
 export const money = (x: number | null | undefined) => {
   if (x == null) return '—';
@@ -65,6 +67,8 @@ export function PlanetView({ p, galaxy, token, onStar }: { p: Planet; galaxy: Ga
     .slice(0, 6), [galaxy, pi]);
   const topIndex = p.topPnl ? galaxy.stars.findIndex((s) => s.address === p.topPnl!.address) : -1;
   const max = Math.max(1, ...p.cohorts.map((c) => Math.abs(c.netFlowUsd)));
+  const world = useMemo(() => worldStyle(p), [p]);
+  const moons = useMemo(() => moonsOf(galaxy, pi), [galaxy, pi]);
   const closes = token?.candles.map((c) => c.close) ?? [];
   const change30 = closes.length > 1 ? (closes[closes.length - 1] / closes[0] - 1) * 100 : null;
   const d = token?.details as Record<string, string | number | null> | null | undefined;
@@ -81,6 +85,31 @@ export function PlanetView({ p, galaxy, token, onStar }: { p: Planet; galaxy: Ga
         {p.state === 'falling' && <span className="tag red">down {Math.round(-(p.change7d ?? 0))}% this week</span>}
         {p.state === 'flagged' && <span className="tag red">flagged by Nansen</span>}
       </div>
+
+      <h4>World survey <small>every feature is a number</small></h4>
+      <ul className="survey">
+        <li><b>{world.biomeName}</b><span>{world.why}</span></li>
+        <li><b>Oceans ≈ {world.oceanPct}%</b><span>Liquidity is water: {world.oceanWhy}.</span></li>
+        <li><b>Weather</b><span>{world.weather}</span></li>
+        <li><b>{world.settlements} settlements</b><span>Night-side lights: {p.holders} holders and {p.traders24h} of today&apos;s traders.</span></li>
+        {p.smartHolders > 0 && <li><b>Golden rings</b><span>{p.smartHolders} smart money holder{p.smartHolders > 1 ? 's' : ''}.</span></li>}
+      </ul>
+      {moons.length > 0 && (
+        <>
+          <h4>Moons: the biggest holders <small>tgm/holders</small></h4>
+          <ul className="people">
+            {moons.map((m) => {
+              const s = galaxy.stars[m.star];
+              return (
+                <li key={m.star}><button onClick={() => onStar(m.star)}>
+                  <i style={{ background: KIND[s.kind].color }} /><span>{s.name}</span>
+                  <b>{(m.share * 100).toFixed(2)}%</b>
+                </button></li>
+              );
+            })}
+          </ul>
+        </>
+      )}
 
       <h4>Price, 30 days <small>tgm/token-ohlcv</small></h4>
       {token === undefined ? <p className="note">Asking Nansen…</p> : closes.length > 1 ? (

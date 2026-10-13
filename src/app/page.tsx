@@ -33,10 +33,12 @@ export default function Page() {
     }).catch((e) => setError(e.message));
   }, []);
 
+  // Selecting flies to it; closing a dossier leaves the camera where it is.
   const select = useCallback((f: Focus) => {
     setSelected(f);
-    scene.current?.flyTo(f);
+    if (f) scene.current?.flyTo(f);
   }, []);
+  const home = useCallback(() => { setSelected(null); scene.current?.flyTo(null); }, []);
 
   const toggleFlight = useCallback((on: boolean) => {
     setFlying(on);
@@ -51,10 +53,11 @@ export default function Page() {
       if (e.key === 'Escape') { if (selected) select(null); else if (flying) toggleFlight(false); }
       else if (e.code === 'KeyF' && galaxy && introDone) toggleFlight(!flying);
       else if (e.code === 'KeyR' && flying) scene.current?.scan();
+      else if (e.code === 'KeyH' && !flying && galaxy) home();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [select, toggleFlight, flying, selected, galaxy, introDone]);
+  }, [select, home, toggleFlight, flying, selected, galaxy, introDone]);
 
   const results = useMemo(() => {
     if (!galaxy || query.trim().length < 2) return [];
@@ -148,6 +151,7 @@ export default function Page() {
               <li key={k}><i style={{ background: KIND[k].color, boxShadow: `0 0 10px ${KIND[k].color}` }} />{KIND[k].name}<em>{(counts[k] ?? 0).toLocaleString()}</em></li>
             ))}
             <li className="hint">Brightness = proven profit, Nansen labels and size</li>
+            <li className="hint"><kbd>H</kbd> back to the whole galaxy</li>
           </ul>
 
           {!flying && (
@@ -159,6 +163,21 @@ export default function Page() {
           {flying && (
             <div className="cockpit" aria-live="polite">
               <div className="reticle"><i /><i /><i /><i /></div>
+              {hud?.world && (
+                <div className="expedition">
+                  <span className="eyebrow">Expedition · {hud.world.zone}</span>
+                  <b>{hud.world.name}</b>
+                  <span className="biome">{hud.world.biome}</span>
+                  <dl>
+                    <dt>Altitude</dt><dd>{Math.round(hud.world.altitudeKm).toLocaleString()} km</dd>
+                    <dt>Local time</dt><dd>{hud.world.local}</dd>
+                    <dt>Oceans</dt><dd>≈ {hud.world.ocean}%</dd>
+                    <dt>Settlements</dt><dd>{hud.world.settlements}</dd>
+                  </dl>
+                  <p>{hud.world.weather}</p>
+                  <button className="survey-btn" onClick={() => select({ type: 'planet', index: hud.world!.planet })}>Survey with Nansen</button>
+                </div>
+              )}
               {hud?.target && (
                 <div className="lock">
                   <span className="eyebrow">Target locked · {hud.target.kind}</span>
@@ -181,7 +200,8 @@ export default function Page() {
                 <li><kbd>Shift</kbd> boost</li>
                 <li><kbd>Space</kbd> brake</li>
                 <li>drag to steer</li>
-                <li><kbd>Esc</kbd> land</li>
+                <li>fly low over a world for an expedition</li>
+                <li><kbd>Esc</kbd> back to orbit view</li>
               </ul>
             </div>
           )}
