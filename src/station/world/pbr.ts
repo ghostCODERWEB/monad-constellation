@@ -409,7 +409,7 @@ export function rackModule(kind: number) {
         rect(60, y + 12, W - 120, 206, '#d3d0c8', 126, '#8a8b92', 2);
         handle(W / 2 - 90, y + 96, 180);
         text(`M${100 + Math.floor(r() * 899)}`, 80, y + 52, 38, '#1c4fa8');
-        text(['CREW PROVISIONS', 'SPARE FILTERS', 'MED SUPPLIES', 'CABLES · ETHERNET', 'MAINT KIT'][Math.floor(r() * 5)], 80, y + 200, 28, '#2b2b32');
+        text(['SPARE DRIVES', 'SPARE FILTERS', 'CALIBRATION KIT', 'CABLES · ETHERNET', 'TOOL KIT'][Math.floor(r() * 5)], 80, y + 200, 28, '#2b2b32');
         for (const [x, yy] of [[W - 90, y + 30], [W - 90, y + 200]]) screw(x, yy, 8);
         rect(W - 190, y + 40, 80, 40, '#f3f1ea', 150, '#44454c', 2); text('LOCK', W - 150, y + 70, 20, '#222', 'center');
       }
@@ -442,44 +442,56 @@ export function rackModule(kind: number) {
       for (let y = 80; y < 480; y += 20) { rect(80, y, W - 160, 12, '#26272c', 60); a.fillStyle = 'rgba(255,255,255,0.12)'; a.fillRect(80, y + 10, W - 160, 2); }
       rect(W / 2 - 200, 470, 400, 36, '#e9c11b', 160, '#444', 2); text('KEEP CLEAR · AIRFLOW', W / 2, 498, 22, '#111', 'center');
       break;
-    case 4: // cargo transfer bag strapped on
-      rect(40, 36, W - 80, 490, '#bdb9ae', 118);
-      a.fillStyle = '#e4dcc4'; a.beginPath(); a.roundRect(80, 70, W - 160, 420, 46); a.fill();
-      h.fillStyle = '#a0a0a0'; h.beginPath(); h.roundRect(80, 70, W - 160, 420, 46); h.fill();
-      a.strokeStyle = '#8f866e'; a.lineWidth = 4; a.setLineDash([16, 10]); a.beginPath(); a.roundRect(104, 94, W - 208, 372, 34); a.stroke(); a.setLineDash([]);
-      for (const y of [140, 400]) { rect(60, y, W - 120, 56, '#1c1c22', 190); a.fillStyle = '#34343c'; for (let x = 70; x < W - 70; x += 12) a.fillRect(x, y + 6, 6, 44); }
-      rect(W / 2 - 150, 235, 300, 100, '#f6f6f2', 150, '#222', 3); text(`CTB ${1000 + Math.floor(r() * 8999)}`, W / 2, 292, 44, '#111', 'center'); text('WATER · FOOD · MISC', W / 2, 322, 20, '#444', 'center', false);
-      break;
-    case 5: // science locker with quarter-turn fasteners and a patch
-      rect(40, 40, W - 80, 480, '#dad7cf', 138, '#6a6b72', 4);
-      for (let i = 0; i < 4; i++) { const x = 90 + i * 215; a.fillStyle = '#3b3d45'; a.beginPath(); a.arc(x + 20, 120, 34, 0, 7); a.fill(); rect(x - 4, 112, 48, 16, '#d6d8de', 190, '#111', 2); h.fillStyle = '#5a5a5a'; h.beginPath(); h.arc(x + 20, 120, 34, 0, 7); h.fill(); h.fillStyle = '#b0b0b0'; h.fillRect(x - 4, 112, 48, 16); }
-      rect(90, 200, 380, 250, '#e9e6de', 150, '#44454c', 3);
-      text('EXPRESS RACK 4', 110, 250, 34, '#17181c'); text('PLANT HABITAT · MICROBIOME', 110, 292, 22, '#333', 'left', false);
-      for (let i = 0; i < 4; i++) { led(130 + i * 56, 360, palette[i]); }
-      a.fillStyle = '#0b0618'; a.beginPath(); a.arc(750, 330, 120, 0, 7); a.fill(); a.strokeStyle = '#836ef9'; a.lineWidth = 12; a.stroke();
-      a.fillStyle = '#836ef9'; a.beginPath(); a.moveTo(750, 240); a.lineTo(790, 330); a.lineTo(750, 312); a.lineTo(710, 330); a.closePath(); a.fill();
-      text('MONAD × NANSEN', 750, 400, 20, '#efeaff', 'center');
-      h.fillStyle = '#9a9a9a'; h.beginPath(); h.arc(750, 330, 120, 0, 7); h.fill();
-      break;
-    case 6: // quick-disconnect fluid panel
-      rect(40, 40, W - 80, 480, '#d2cfc7', 134, '#6a6b72', 4);
-      for (let i = 0; i < 4; i++) {
-        const x = 150 + i * 235;
-        a.fillStyle = palette[i]; a.beginPath(); a.arc(x, 220, 62, 0, 7); a.fill();
-        a.fillStyle = '#17181c'; a.beginPath(); a.arc(x, 220, 40, 0, 7); a.fill();
-        a.fillStyle = '#9a9ca4'; a.beginPath(); a.arc(x, 220, 20, 0, 7); a.fill();
-        h.fillStyle = '#b0b0b0'; h.beginPath(); h.arc(x, 220, 62, 0, 7); h.fill(); h.fillStyle = '#404040'; h.beginPath(); h.arc(x, 220, 40, 0, 7); h.fill(); h.fillStyle = '#909090'; h.beginPath(); h.arc(x, 220, 20, 0, 7); h.fill();
-        text(['H₂O IN', 'H₂O OUT', 'N₂', 'VAC'][i], x, 340, 30, '#17181c', 'center');
-        rect(x - 52, 365, 104, 22, '#f2d24b', 155, '#333', 2);
-        for (const dx of [-80, 80]) screw(x + dx, 220, 8);
+    case 4: // three 1U server shelves
+      rect(40, 36, W - 80, 490, '#bdbab2', 120);
+      for (let i = 0; i < 3; i++) {
+        const y = 52 + i * 160;
+        rect(60, y, W - 120, 142, '#2b2d34', 175, '#101115', 3);
+        for (const fx of [150, 330]) { // fan grilles
+          a.fillStyle = '#16171b'; a.beginPath(); a.arc(fx, y + 71, 52, 0, 7); a.fill();
+          a.strokeStyle = '#4b4e58'; a.lineWidth = 3; for (let k = 1; k < 5; k++) { a.beginPath(); a.arc(fx, y + 71, k * 10, 0, 7); a.stroke(); }
+          h.fillStyle = '#505050'; h.beginPath(); h.arc(fx, y + 71, 52, 0, 7); h.fill();
+        }
+        for (let k = 0; k < 8; k++) { rect(450 + k * 56, y + 22, 44, 70, '#1b1c21', 150, '#555963', 2); led(472 + k * 56, y + 110, r() < 0.8 ? '#2fdc6b' : '#f2a516'); }
+        rect(W - 330, y + 106, 240, 28, '#e9e6de', 150, '#222', 2); text(`NANSEN DATA NODE 0${i + 1}`, W - 210, y + 127, 17, '#16161b', 'center');
+        screw(78, y + 14, 6); screw(78, y + 128, 6); screw(W - 78, y + 14, 6); screw(W - 78, y + 128, 6);
       }
-      text('FLUIDS · QD PANEL 6', 80, 470, 30, '#2b2b32');
       break;
-    default: // stencilled stowage with velcro and a tape label
+    case 5: { // network patch panel with patch cables
+      rect(40, 40, W - 80, 480, '#2a2c33', 128, '#101115', 4);
+      const cols = ['#2f7bd6', '#e0a60f', '#2b8a3e', '#b3261e', '#9aa0ad'];
+      for (let row = 0; row < 2; row++) for (let k = 0; k < 24; k++) {
+        const x = 90 + k * 36 + (k >= 12 ? 24 : 0), y = 90 + row * 120;
+        rect(x, y, 28, 30, '#0c0d10', 85, '#4b4e58', 2);
+        led(x + 14, y - 10, r() < 0.75 ? '#2fdc6b' : '#0a3a1c');
+        if (r() < 0.7) { // a cable hangs from the port
+          const col = cols[Math.floor(r() * cols.length)];
+          a.strokeStyle = col; a.lineWidth = 7; a.lineCap = 'round'; a.beginPath(); a.moveTo(x + 14, y + 30); a.bezierCurveTo(x + 14, y + 90, x + 14 + (r() - 0.5) * 80, y + 70, x + 14 + (r() - 0.5) * 30, y + 100); a.stroke();
+          h.strokeStyle = '#b5b5b5'; h.lineWidth = 8; h.beginPath(); h.moveTo(x + 14, y + 30); h.lineTo(x + 14, y + 100); h.stroke();
+        }
+      }
+      rect(80, 440, 420, 50, '#e9e6de', 150, '#222', 2); text('MONAD RPC GATEWAY · NODE LINKS', 290, 474, 22, '#16161b', 'center');
+      break;
+    }
+    case 6: // communications unit (honest: the link is standby)
+      rect(40, 40, W - 80, 480, '#d6d3cb', 135, '#6a6b72', 4);
+      for (let i = 0; i < 6; i++) { // coax and fibre connectors
+        const x = 120 + i * 150;
+        a.fillStyle = '#17181c'; a.beginPath(); a.arc(x, 130, 38, 0, 7); a.fill(); a.fillStyle = '#c8cbd2'; a.beginPath(); a.arc(x, 130, 24, 0, 7); a.fill(); a.fillStyle = '#17181c'; a.beginPath(); a.arc(x, 130, 9, 0, 7); a.fill();
+        h.fillStyle = '#b8b8b8'; h.beginPath(); h.arc(x, 130, 38, 0, 7); h.fill(); h.fillStyle = '#404040'; h.beginPath(); h.arc(x, 130, 9, 0, 7); h.fill();
+        text(['TX1', 'RX1', 'TX2', 'RX2', 'GPS', 'REF'][i], x, 198, 22, '#17181c', 'center');
+      }
+      rect(100, 250, 520, 90, '#07090c', 70, '#3b3d45', 4);
+      for (let k = 0; k < 16; k++) rect(120 + k * 31, 270 + (k < 3 ? 0 : 0), 22, 50, k < 2 ? '#2fdc6b' : '#14301f', 150, undefined);
+      text('SIGNAL', 100, 366, 22, '#2b2b32'); text('LINK STANDBY', 620, 330, 26, '#2b2b32', 'right');
+      rect(100, 410, 360, 70, '#e9e6de', 150, '#222', 2); text('KU-BAND · DATA RELAY', 280, 455, 26, '#16161b', 'center');
+      led(560, 445, '#f2a516'); text('STBY', 620, 452, 22, '#2b2b32');
+      break;
+    default: // blanking panel with a label strip
       rect(40, 40, W - 80, 480, '#d8d5cd', 136, '#6a6b72', 4);
-      text('STOWAGE', W / 2, 190, 96, '#8b8b93', 'center');
-      for (let i = 0; i < 3; i++) { rect(120 + i * 290, 250, 240, 190, '#1c1c22', 190); a.fillStyle = '#30303a'; for (let x = 128 + i * 290; x < 352 + i * 290; x += 10) a.fillRect(x, 258, 5, 174); }
-      a.save(); a.translate(240, 470); a.rotate(-0.04); a.fillStyle = '#f1e7a8'; a.fillRect(-110, -26, 220, 52); a.fillStyle = '#2a2a2a'; a.font = '22px "Marker Felt", "Comic Sans MS", sans-serif'; a.textAlign = 'center'; a.fillText('spare socks (mine)', 0, 8); a.restore();
+      handle(W / 2 - 110, 150, 220); handle(W / 2 - 110, 380, 220);
+      rect(W / 2 - 200, 260, 400, 56, '#f1efe7', 150, '#333', 2); text('SPARE · BLANKING PANEL', W / 2, 297, 26, '#16161b', 'center');
+      for (const [x, y] of [[90, 90], [W - 90, 90], [90, 470], [W - 90, 470]]) screw(x, y, 10);
   }
   frame();
   // Wear: scuffs, grime along the seams, fingerprints and a faint yellowing.

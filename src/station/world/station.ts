@@ -58,6 +58,7 @@ export function buildStation(): Station {
   const lightMat = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xfff4e6, emissiveIntensity: 0.85 });
   const accentMat = new THREE.MeshStandardMaterial({ color: 0x836ef9, emissive: 0x836ef9, emissiveIntensity: 0.9 });
   const velcroMat = new THREE.MeshStandardMaterial({ color: 0x1c1c22, roughness: 1 });
+  const egressMat = new THREE.MeshStandardMaterial({ color: 0x8cffb0, emissive: 0x2fe07a, emissiveIntensity: 0.55, roughness: 0.6 });
   const glass = new THREE.MeshPhysicalMaterial({ color: 0xbfd8ff, transparent: true, opacity: 0.1, roughness: 0.04, metalness: 0, clearcoat: 1, depthWrite: false, side: THREE.DoubleSide });
   const mliMat = new THREE.MeshStandardMaterial({ color: 0xeeeeea, roughness: 0.75, metalness: 0.05, map: panelTexture([4, 2]) });
 
@@ -151,39 +152,34 @@ export function buildStation(): Station {
     add(g);
   };
 
-  /** A hatch frame around a square opening, with the hatch door swung aside. */
-  const hatch = (c: THREE.Vector3, n: THREE.Vector3, half: number, open = true, swing = 1, frame: THREE.Material = frameMat) => {
+  /** A hatch: a thick frame round a square opening with a seal, four latch blocks, a status lamp and a label. Hatches stay open. */
+  const hatch = (c: THREE.Vector3, n: THREE.Vector3, half: number, label = 'HATCH', frame: THREE.Material = frameMat) => {
     const g = new THREE.Group();
-    const t = 0.12, d = 0.18;
+    const t = 0.14, d = 0.2;
     const parts: [number, number, number, number][] = [[0, half + t / 2, half * 2 + t * 2, t], [0, -half - t / 2, half * 2 + t * 2, t], [half + t / 2, 0, t, half * 2], [-half - t / 2, 0, t, half * 2]];
-    for (const [x, y, w, h] of parts) {
-      const b = boxPBR(w, h, d, frame);
-      b.position.set(x, y, 0);
-      g.add(b);
+    for (const [x, y, w, h] of parts) { const b = boxPBR(w, h, d, frame); b.position.set(x, y, 0); g.add(b); }
+    // Rubber seal just inside the frame.
+    const seal = pbrSet('rubber', { color: 0x1b1d21, normal: 1.3 });
+    for (const [x, y, w, h] of [[0, half - 0.012, half * 2, 0.024], [0, -half + 0.012, half * 2, 0.024], [half - 0.012, 0, 0.024, half * 2], [-half + 0.012, 0, 0.024, half * 2]] as const) {
+      const sl = boxPBR(w, h, d * 0.9, seal, 0.2); sl.position.set(x, y, 0); g.add(sl);
     }
-    // Warning chevrons on the frame.
-    const chev = new THREE.Mesh(new THREE.PlaneGeometry(half * 2, 0.08), new THREE.MeshStandardMaterial({ map: labelTexture(['▲ HATCH ▲'], { bg: '#facc15', fg: '#111', w: 256, h: 32, font: 18 }) }));
-    chev.position.set(0, half + t + 0.05, d / 2 + 0.001);
-    g.add(chev);
-    let door: THREE.Object3D = new THREE.Group();
-    const slab = new THREE.Mesh(new THREE.BoxGeometry(half * 2, half * 2, 0.08), new THREE.MeshStandardMaterial({ color: 0xc8c5be, roughness: 0.5, metalness: 0.4, map: rackTexture('grille', 99) }));
-    const pivot = new THREE.Group();
-    pivot.position.set(-half, 0, 0);
-    slab.position.set(half, 0, 0);
-    pivot.add(slab);
-    const handle = new THREE.Mesh(new THREE.TorusGeometry(0.12, 0.02, 8, 16, Math.PI), railMat);
-    handle.position.set(half * 1.6, 0, 0.06);
-    pivot.add(handle);
-    pivot.rotation.y = open ? -Math.PI * 0.55 * swing : 0;
-    if (swing < 0) { pivot.position.x = half; slab.position.x = -half; handle.position.x = -half * 1.6; }
-    g.add(pivot);
-    door = pivot;
+    // Latch blocks and bolts on the frame's face.
+    for (const [x, y] of [[-1, -1], [1, -1], [-1, 1], [1, 1]] as const) {
+      const lb = boxPBR(0.1, 0.1, 0.05, frame, 0.2); lb.position.set(x * (half + t / 2), y * (half + t / 2), d / 2 + 0.02); g.add(lb);
+      const bolt = new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.014, 0.02, 12), frame); bolt.rotation.x = Math.PI / 2; bolt.position.set(x * (half + t / 2), y * (half + t / 2), d / 2 + 0.055); g.add(bolt);
+    }
+    // Label tape and a green "open and clear" lamp.
+    const tag = new THREE.Mesh(new THREE.PlaneGeometry(half * 1.2, 0.08), new THREE.MeshStandardMaterial({ map: labelTexture([label], { bg: '#facc15', fg: '#111', w: 256, h: 32, font: 18 }), roughness: 0.6 }));
+    tag.position.set(0, half + t + 0.05, d / 2 + 0.001); g.add(tag);
+    const lamp = new THREE.Mesh(new THREE.CircleGeometry(0.018, 16), hubLed); lamp.position.set(half + t / 2, half + t + 0.05, d / 2 + 0.002); g.add(lamp);
     g.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), n);
     g.position.copy(c);
     add(g);
-    return door;
+    return g;
   };
 
+  // Rack columns: 0 drawers · 1 power breakers · 2 status display · 3 air vent · 4 server shelf · 5 network patch panel · 6 comms unit · 7 blanking panel.
+  const RACK_TEMPLATES = [[2, 4, 4, 5, 3], [2, 6, 5, 6, 3], [1, 1, 3, 0, 7], [0, 0, 0, 0, 7]];
   const rackGeos = new Map<string, THREE.PlaneGeometry>();
   const rackGeo = (w: number, h: number) => { const k = `${w.toFixed(3)}x${h.toFixed(3)}`; let g = rackGeos.get(k); if (!g) rackGeos.set(k, g = new THREE.PlaneGeometry(w, h)); return g; };
   const rackMats = new Map<number, THREE.Material>();
@@ -207,20 +203,23 @@ export function buildStation(): Station {
     walls.forEach(([c, n, uAxis], wi) => {
       face(c, n, uAxis, len, s * 2, undefined, wm);
       if (opts.racks === false) return;
+      // The racks stand on the two side walls only; floor and ceiling stay clear for the light panels and air ducts.
+      if (P && (wi === 0 || wi === 1)) return;
       // Racks: about a metre each, inset slightly, faces of varied kinds.
       const count = Math.max(1, Math.floor(len / 1.05));
       for (let i = 0; i < count; i++) {
         const kind = RACKS[(i + wi * 3 + (opts.seed ?? 0)) % RACKS.length];
         const rx = x0 + (i + 0.5) * (len / count);
         if (P) {
-          // Racks as five stacked 1 × 0.55 m modules, each a 1024 px/m painted-aluminium face, between anodised rails.
+          // Each rack is five stacked 1 × 0.55 m modules at 1024 px/m, chosen to belong together:
+          // compute racks, comms racks, power racks and storage racks.
           if (wi === 2 && opts.clear && rx > opts.clear[0] && rx < opts.clear[1]) continue;
           const rw = len / count - 0.08, rh = s * 2 - 0.25, mh = rh / 5;
           const vv = new THREE.Vector3().crossVectors(n, uAxis).normalize();
           const q4 = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(uAxis, vv, n));
+          const template = RACK_TEMPLATES[(i + (wi === 3 ? 2 : 0)) % RACK_TEMPLATES.length];
           for (let j = 0; j < 5; j++) {
-            const mk = (i * 3 + wi * 5 + j * 2 + (opts.seed ?? 0)) % RACK_MODULES;
-            const m = new THREE.Mesh(rackGeo(rw, mh), rackMat(mk));
+            const m = new THREE.Mesh(rackGeo(rw, mh), rackMat(template[j]));
             m.quaternion.copy(q4);
             m.position.copy(c).setX(rx).addScaledVector(vv, -rh / 2 + mh * (j + 0.5)).addScaledVector(n, 0.04);
             add(m);
@@ -230,7 +229,6 @@ export function buildStation(): Station {
             rail.position.copy(c).setX(rx).addScaledVector(uAxis, sx * (rw / 2 + 0.02)).addScaledVector(n, 0.05);
             add(rail);
           }
-          if (i % 2 === 0) wallSpots.push({ zone, pos: c.clone().setX(rx).addScaledVector(n, 0.1), normal: n.clone() });
           continue;
         }
         const r = plane(len / count - 0.08, s * 2 - 0.25, new THREE.MeshStandardMaterial({ map: rackTexture(kind, i + wi * 7 + (opts.seed ?? 0)), roughness: 0.6, metalness: 0.1 }));
@@ -246,7 +244,7 @@ export function buildStation(): Station {
       const l = new THREE.Mesh(new THREE.BoxGeometry(len - 0.6, 0.04, 0.12), P ? hubLamp : lightMat);
       l.position.set(cx, s - 0.06, z);
       add(l);
-      const a = new THREE.Mesh(new THREE.BoxGeometry(len - 0.6, 0.012, 0.02), accentMat);
+      const a = new THREE.Mesh(new THREE.BoxGeometry(len - 0.6, 0.012, 0.03), egressMat); // emergency egress strip along the floor
       a.position.set(cx, -s + 0.03, z);
       add(a);
     }
@@ -275,19 +273,19 @@ export function buildStation(): Station {
         add(new THREE.Mesh(P ? scaleUV(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 60, 0.012, 10, false), 14, 1) : new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 40, 0.012, 6, false), P ? rubberCables[(j + k) % rubberCables.length] : cableMats[(j + k) % cableMats.length]));
       }
     }
-    // Velcro patches: crews stick things to walls with them.
-    const velcro = new THREE.InstancedMesh(new THREE.PlaneGeometry(0.12, 0.12), velcroMat, 18);
-    const m4 = new THREE.Matrix4(), q = new THREE.Quaternion();
-    for (let i = 0; i < 18; i++) {
-      const w = walls[i % 4];
-      const n = w[1];
-      const pos = w[0].clone().setX(x0 + 0.4 + ((i * 0.61) % 1) * (len - 0.8)).addScaledVector(n, 0.05);
-      const v = new THREE.Vector3().crossVectors(n, V(1, 0, 0)).normalize();
-      pos.addScaledVector(v, (((i * 0.37) % 1) - 0.5) * s);
-      q.setFromRotationMatrix(new THREE.Matrix4().makeBasis(V(1, 0, 0), v, n));
-      velcro.setMatrixAt(i, m4.compose(pos, q, V(1, 1, 1)));
+    // Ceiling air duct with louvred outlets, and a smoke detector.
+    if (P) {
+      const duct = boxPBR(len - 1.2, 0.18, 0.3, hubFrame, 0.5);
+      duct.position.set(cx, s - 0.1, 0);
+      add(duct);
+      for (let x = x0 + 1.2; x < x1 - 0.8; x += 1.5) {
+        const outlet = new THREE.Mesh(new THREE.PlaneGeometry(0.46, 0.26), rackMat(3));
+        outlet.rotation.x = Math.PI / 2; outlet.position.set(x, s - 0.1 - 0.092, 0); add(outlet);
+      }
+      const det = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.07, 0.03, 24), hubFrame);
+      det.position.set(x0 + 0.7, s - 0.02, 0.6); add(det);
+      const detLed = new THREE.Mesh(new THREE.CircleGeometry(0.008, 10), hubLed); detLed.rotation.x = Math.PI / 2; detLed.position.set(x0 + 0.7, s - 0.037, 0.6); add(detLed);
     }
-    add(velcro);
     const light = new THREE.PointLight(0xfff1e0, P ? 2.4 : 3.2, s * 8, 2);
     light.position.set(cx, s * 0.6, 0);
     add(light);
@@ -359,15 +357,26 @@ export function buildStation(): Station {
 
   // Research room, the middle of the line. Its west end opens onto the glass walkway to the hangar.
   space.add(box('Walkway door', 'Research module', [1.7, -0.95, -0.95], [4.1, 0.95, 0.95]));
-  hatch(V(2.8, 0, 0), V(1, 0, 0), 0.95, true, -1, hubFrame);
+  hatch(V(2.8, 0, 0), V(1, 0, 0), 0.95, 'HATCH R-1 · WALKWAY', hubFrame);
   moduleX('Research module', 2.8, 11.2, 1.5, { seed: 1, pbr: true, clear: [7.4, 9.0] });
   face(V(2.8, 0, 0), V(1, 0, 0), V(0, 0, -1), 3, 3, 0.95, hubWall);
   face(V(11.2, 0, 0), V(-1, 0, 0), V(0, 0, 1), 3, 3, 0.95, hubWall);
   add(buildWorkstation(V(8.2, -0.25, -1.5)));
+  // Emergency kit by the walkway hatch: a portable fire extinguisher on its bracket, with a placard.
+  {
+    const ex = new THREE.Group();
+    ex.add(new THREE.Mesh(new THREE.CapsuleGeometry(0.055, 0.3, 8, 24), hubExt));
+    const head = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.04, 0.05, 16), hubFrame); head.position.y = 0.22; ex.add(head);
+    for (const y of [-0.08, 0.1]) { const strap = new THREE.Mesh(new THREE.TorusGeometry(0.058, 0.007, 8, 24), velcroMat); strap.position.y = y; strap.rotation.x = Math.PI / 2; ex.add(strap); }
+    ex.position.set(2.95, -0.1, 1.28);
+    add(ex);
+    const placard = new THREE.Mesh(new THREE.PlaneGeometry(0.2, 0.12), new THREE.MeshStandardMaterial({ map: plateTexture(['PFE', 'CO₂ · 2 kg'], { bg: '#f5f5f5', w: 256, h: 160, font: 54 }), roughness: 0.5 }));
+    placard.rotation.y = Math.PI / 2; placard.position.set(2.82, 0.32, 1.28); add(placard);
+  }
 
   // Observation module (east of research): bigger, with a great round window.
   door('Observation module', 'x', 11.0, 11.8, 0.95);
-  hatch(V(11.2, 0, 0), V(1, 0, 0), 0.95, true, 1, hubFrame);
+  hatch(V(11.2, 0, 0), V(1, 0, 0), 0.95, 'HATCH R-2 · OBSERVATION', hubFrame);
   const OS = 2.2;
   space.add(box('Observation module', 'Observation module', [11.6, -OS, -OS], [17.6, OS, OS]));
   {
@@ -511,11 +520,8 @@ export function buildStation(): Station {
     face(V(0, HG.y, cz), V(0, -1, 0), V(1, 0, 0), HG.x * 2, len, undefined, hangarMat);
     face(V(-HG.x, 0, cz), V(1, 0, 0), V(0, 0, 1), len, HG.y * 2, undefined, hangarMat);
     face(V(HG.x, 0, cz), V(-1, 0, 0), V(0, 0, -1), len, HG.y * 2, undefined, hangarMat);
-    // The hangar's station-side wall is mostly glass: the shuttle is on show from mission control.
-    windowFace(V(0, 0, HG.z1), V(0, 0, -1), V(-1, 0, 0), HG.x * 2, HG.y * 2, [
-      { r: [-0.95, -0.95, 0.95, 0.95], open: true },
-      { r: [-5.2, -2.6, -1.4, 2.9] }, { r: [1.4, -2.6, 5.2, 2.9] }, { r: [-1.4, 1.4, 1.4, 2.9] },
-    ], hangarMat, hubGlass, hubFrame);
+    // The wall facing the walkway: solid, with the doorway through it.
+    face(V(0, 0, HG.z1), V(0, 0, -1), V(-1, 0, 0), HG.x * 2, HG.y * 2, 0.95, hangarMat);
     // Structural ribs every 3 m: wall posts, ceiling beams, floor kick-rails.
     for (let z = HG.z0 + 1.5; z < HG.z1 - 0.4; z += 3) {
       for (const sx of [-1, 1]) { const p = boxPBR(0.12, HG.y * 2, 0.24, hubFrame, 0.6); p.position.set(sx * (HG.x - 0.06), 0, z); add(p); }
@@ -527,7 +533,6 @@ export function buildStation(): Station {
       kp.rotation.y = sx > 0 ? -Math.PI / 2 : Math.PI / 2; kp.position.set(sx * (HG.x - 0.02), -HG.y + 0.3, cz); add(kp);
     }
     for (const lx of [-2.1, 2.1]) { const m = new THREE.Mesh(new THREE.PlaneGeometry(0.16, len - 1), lineYellow); m.rotation.x = -Math.PI / 2; m.position.set(lx, -HG.y + 0.012, cz); add(m); }
-    for (let z = HG.z0 + 1; z < HG.z1 - 0.5; z += 2) { const m = new THREE.Mesh(new THREE.PlaneGeometry(0.4, 1), lineYellow); m.rotation.x = -Math.PI / 2; m.position.set(0, -HG.y + 0.012, z); add(m); }
     const decal = new THREE.Mesh(new THREE.PlaneGeometry(6, 1.5), new THREE.MeshStandardMaterial({ map: plateTexture(['SHUTTLE BAY 01'], { bg: '#232733', fg: '#facc15', w: 2048, h: 512, font: 200 }), roughness: 0.7, transparent: true }));
     decal.rotation.x = -Math.PI / 2; decal.position.set(0, -HG.y + 0.015, HG.z1 - 3.2); add(decal);
     // Caged work lights along both walls: housing, cage bars and a diffuser.
@@ -536,10 +541,28 @@ export function buildStation(): Station {
       const lens = new THREE.Mesh(new THREE.PlaneGeometry(0.24, 0.6), hubLamp); lens.rotation.x = Math.PI / 2; lens.position.set(x, HG.y - 0.905, z); add(lens);
       for (let k = -2; k <= 2; k++) { const bar = boxPBR(0.01, 0.015, 0.7, hubFrame, 0.3); bar.position.set(x + k * 0.055, HG.y - 0.92, z); add(bar); }
     }
-    const sign = plane(3.4, 0.5, new THREE.MeshStandardMaterial({ map: labelTexture(['PLEASE SECURE ALL BELONGINGS, INCLUDING YOUR EXPECTATIONS'], { bg: '#1f2937', fg: '#facc15', w: 1024, h: 150, font: 30 }), roughness: 0.5 }));
+    const sign = plane(3.4, 0.5, new THREE.MeshStandardMaterial({ map: labelTexture(['SHUTTLE BAY 01 · KEEP CLEAR OF THE DOORS'], { bg: '#1f2937', fg: '#facc15', w: 1024, h: 150, font: 40 }), roughness: 0.5 }));
     sign.position.set(0, 3.4, HG.z1 - 0.05);
     sign.rotation.y = Math.PI;
     add(sign);
+    // Bay equipment, each where it would be used: ground-support panel at the cradle, door control by the hatch,
+    // fire-suppression main and nozzles overhead, an extinguisher cabinet, an amber beacon over the doors.
+    const gse = boxPBR(0.14, 1.5, 1.9, hubFrame, 0.5); gse.position.set(-HG.x + 0.1, -1.6, -11.5); add(gse);
+    const gsePlate = new THREE.Mesh(new THREE.PlaneGeometry(1.7, 1.3), new THREE.MeshStandardMaterial({ map: plateTexture(['GROUND SUPPORT', 'FUEL · POWER · DATA', 'CRADLE 01'], { bg: '#e9e6de', w: 1024, h: 768, font: 92 }), roughness: 0.55 }));
+    gsePlate.rotation.y = Math.PI / 2; gsePlate.position.set(-HG.x + 0.18, -1.6, -11.5); add(gsePlate);
+    const ctl = boxPBR(0.9, 0.7, 0.12, hubFrame, 0.5); ctl.position.set(-1.8, 0.7, HG.z1 - 0.1); add(ctl);
+    const ctlFace = new THREE.Mesh(new THREE.PlaneGeometry(0.8, 0.6), new THREE.MeshStandardMaterial({ map: plateTexture(['BAY CONTROL', 'DOORS CLOSED', 'SHUTTLE DOCKED'], { bg: '#0b1713', fg: '#6ff0c0', w: 1024, h: 768, font: 100 }), roughness: 0.35 }));
+    ctlFace.rotation.y = Math.PI; ctlFace.position.set(-1.8, 0.7, HG.z1 - 0.17); add(ctlFace);
+    const estop = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.06, 0.05, 24), new THREE.MeshPhysicalMaterial({ color: 0xc81e1e, roughness: 0.3, clearcoat: 1 }));
+    estop.rotation.x = Math.PI / 2; estop.position.set(-1.45, 0.45, HG.z1 - 0.2); add(estop);
+    const fireMat = new THREE.MeshPhysicalMaterial({ color: 0xb3121c, metalness: 0.5, roughness: 0.35, clearcoat: 0.8 });
+    const main = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, len - 1, 24), fireMat); main.rotation.x = Math.PI / 2; main.position.set(2.6, HG.y - 0.12, cz); add(main);
+    for (let z = HG.z0 + 2.5; z < HG.z1 - 1; z += 3.2) { const nz = new THREE.Mesh(new THREE.ConeGeometry(0.07, 0.12, 16), fireMat); nz.rotation.x = Math.PI; nz.position.set(2.6, HG.y - 0.24, z); add(nz); }
+    const cab = boxPBR(0.5, 0.8, 0.16, fireMat as THREE.Material, 0.5); cab.position.set(HG.x - 0.1, -0.6, HG.z1 - 1.2); add(cab);
+    const cabPlate = new THREE.Mesh(new THREE.PlaneGeometry(0.4, 0.2), new THREE.MeshStandardMaterial({ map: plateTexture(['FIRE', 'EXTINGUISHER'], { bg: '#f5f5f5', w: 512, h: 256, font: 70 }), roughness: 0.5 }));
+    cabPlate.rotation.y = -Math.PI / 2; cabPlate.position.set(HG.x - 0.19, -0.35, HG.z1 - 1.2); add(cabPlate);
+    const beacon = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.14, 0.2, 24), new THREE.MeshStandardMaterial({ color: 0xffb020, emissive: 0xff8a00, emissiveIntensity: 0.9, roughness: 0.3 }));
+    beacon.position.set(0, HG.y - 0.3, HG.z0 + 0.7); add(beacon);
     for (const [x, y] of [[-3, 2.5], [3, 2.5]]) {
       const l = new THREE.PointLight(0xe0e8ff, 10, 26, 2);
       l.position.set(x, y, cz);

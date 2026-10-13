@@ -143,10 +143,6 @@ export function buildWorkstation(anchor: THREE.Vector3) {
   const ball = new THREE.Mesh(new THREE.SphereGeometry(0.019, 24, 16), new THREE.MeshPhysicalMaterial({ color: 0xb3121c, roughness: 0.2, clearcoat: 1 }));
   ball.position.y = 0.02; tb.add(ball);
   place(tb, 0.32, 0.02, 0.32);
-  // Tethered tablet-pen and a notebook-sized clip so it isn't a bare desk.
-  const pen = new THREE.Mesh(new THREE.CylinderGeometry(0.004, 0.004, 0.14, 12), new THREE.MeshStandardMaterial({ color: 0x1d4ed8, roughness: 0.4 }));
-  pen.rotation.z = Math.PI / 2; pen.rotation.y = 0.4; place(pen, -0.34, 0.008, 0.35);
-
   // Cable runs: monitors and keyboard down to the bay with zip ties.
   const cableMats = [0x1f2937, 0x7c2d12, 0x374151].map((c) => pbrSet('rubber', { color: c, normal: 1.4 }));
   const run = (from: THREE.Vector3, via: THREE.Vector3, to: THREE.Vector3, mi: number) => {

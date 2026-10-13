@@ -108,8 +108,8 @@ export function installHangar(e: Engine) {
       c.position.copy(t ? to : from); bay.add(c);
     }
   };
-  hose(new THREE.Vector3(-5.85, -1.2, dock.z + 1.4), new THREE.Vector3(dock.x - 1.2, dock.y - 1.4, dock.z + 0.9), 0x1f2937);
-  hose(new THREE.Vector3(-5.85, -2.0, dock.z - 1.2), new THREE.Vector3(dock.x + 1.8, dock.y - 1.3, dock.z - 0.9), 0x7c2d12);
+  hose(new THREE.Vector3(-5.72, -1.2, dock.z + 0.5), new THREE.Vector3(dock.x - 1.2, dock.y - 1.4, dock.z + 0.9), 0x1f2937);
+  hose(new THREE.Vector3(-5.72, -2.0, dock.z - 0.5), new THREE.Vector3(dock.x + 1.8, dock.y - 1.3, dock.z - 0.9), 0x7c2d12);
   for (const x of [-2.4, 2.4]) {
     const chock = new THREE.Mesh(scaleUV(new THREE.BoxGeometry(0.22, 0.2, 0.5), 1, 1), yellow);
     chock.position.set(dock.x + x, -3.65, dock.z + 2.0); bay.add(chock);
