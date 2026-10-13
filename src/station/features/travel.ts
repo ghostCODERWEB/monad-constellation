@@ -1,6 +1,6 @@
 // Room-to-room travel: keys 1 (hangar), 2 (research room), 3 (observation
 // room), or the room buttons. The suit's autopilot flies a smooth line along
-// the station's corridor (hangar tunnel · hub · research · observation), so
+// the station's corridor (hangar · glass walkway · research · observation), so
 // getting between rooms never depends on lining up a hatch by hand. Any move
 // key or Esc cancels it and hands control straight back.
 import * as THREE from 'three';
@@ -9,10 +9,10 @@ import type { Engine } from '../engine';
 const V = (x: number, y: number, z: number) => new THREE.Vector3(x, y, z);
 
 /** The corridor, hangar to observation room: every vertex is clear of walls and hatches. */
-const LINE = [V(0, 0, -9), V(0, 0, -3.8), V(0, 0, 0), V(3.4, 0, 0), V(5.2, 0, 0.2), V(11.4, 0, 0), V(13.6, 0, 0)];
+const LINE = [V(-3.4, 0, 0), V(0.4, 0, 0), V(1.6, 0, 0), V(3.4, 0, 0), V(5.2, 0, 0.2), V(11.4, 0, 0), V(13.6, 0, 0)];
 export type Room = 'hangar' | 'research' | 'observation';
 const STOP: Record<Room, { i: number; look: THREE.Vector3 }> = {
-  hangar: { i: 0, look: V(0, -0.3, -15) },
+  hangar: { i: 0, look: V(-8, -0.3, 0) },
   research: { i: 4, look: V(8.2, 0.1, -1.4) },
   observation: { i: 6, look: V(17.6, 0, 0) },
 };

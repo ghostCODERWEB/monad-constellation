@@ -62,7 +62,10 @@ function addShipHardware(g: THREE.Group) {
 }
 
 export function installHangar(e: Engine) {
-  const dock = e.station.anchors.shuttleDock;
+  // Everything here lives in the hangar bay's own frame (the bay is turned onto the corridor axis: bay (x, z) → world (z + 5.6, −x)).
+  const bay = e.station.interior.getObjectByName('bay')!;
+  bay.updateMatrixWorld(true);
+  const dock = new THREE.Vector3(0, -0.6, -11.5);
   const ship = buildShuttle(shuttleMaterials());
   const box = new THREE.Box3().setFromObject(ship.group);
   const size = box.getSize(new THREE.Vector3());
@@ -74,7 +77,7 @@ export function installHangar(e: Engine) {
   addShipHardware(ship.group);
   ship.light.intensity = 6; ship.light.distance = 6; ship.light.decay = 2;
   for (const p of ship.plumes) p.scale.z = 0.001;
-  e.station.interior.add(ship.group);
+  bay.add(ship.group);
 
   // Docking cradle under the hull and a destination board on the wall.
   const steel = pbrSet('brushed-aluminium', { color: 0xaab0ba, normal: 0.8, roughness: 0.85 });
@@ -83,38 +86,38 @@ export function installHangar(e: Engine) {
   const rubber = pbrSet('rubber', { color: 0x1b1d21, normal: 1.4 });
   const cradle = new THREE.Mesh(scaleUV(new THREE.BoxGeometry(6, 0.25, 3.2), 3, 2), plate);
   cradle.position.set(dock.x, -3.85, dock.z);
-  e.station.interior.add(cradle);
+  bay.add(cradle);
   for (const x of [-2, 2]) for (const z of [-1, 1]) {
     const strut = new THREE.Mesh(scaleUV(new THREE.CylinderGeometry(0.06, 0.08, 2.1, 24), 2, 3), yellow);
     strut.position.set(dock.x + x, -2.75, dock.z + z);
-    e.station.interior.add(strut);
+    bay.add(strut);
     const pad = new THREE.Mesh(scaleUV(new THREE.CylinderGeometry(0.2, 0.2, 0.08, 32), 2, 1), rubber); // rubber hull pad
     pad.position.set(dock.x + x, -1.66, dock.z + z);
-    e.station.interior.add(pad);
+    bay.add(pad);
     const foot = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.26, 0.05, 32), steel);
     foot.position.set(dock.x + x, -3.68, dock.z + z);
-    e.station.interior.add(foot);
+    bay.add(foot);
   }
   // Fuel and power umbilicals: rubber hoses from a wall port to the hull, wheel chocks on the deck.
   const hose = (from: THREE.Vector3, to: THREE.Vector3, color: number) => {
     const mid = from.clone().lerp(to, 0.5); mid.y -= 0.8;
     const m = pbrSet('rubber', { color, normal: 1.5 });
-    e.station.interior.add(new THREE.Mesh(scaleUV(new THREE.TubeGeometry(new THREE.CatmullRomCurve3([from, mid, to]), 48, 0.06, 12, false), 24, 1), m));
+    bay.add(new THREE.Mesh(scaleUV(new THREE.TubeGeometry(new THREE.CatmullRomCurve3([from, mid, to]), 48, 0.06, 12, false), 24, 1), m));
     for (const t of [0.0, 1.0]) {
       const c = new THREE.Mesh(new THREE.CylinderGeometry(0.085, 0.085, 0.14, 24), steel);
-      c.position.copy(t ? to : from); e.station.interior.add(c);
+      c.position.copy(t ? to : from); bay.add(c);
     }
   };
   hose(new THREE.Vector3(-5.85, -1.2, dock.z + 1.4), new THREE.Vector3(dock.x - 1.2, dock.y - 1.4, dock.z + 0.9), 0x1f2937);
   hose(new THREE.Vector3(-5.85, -2.0, dock.z - 1.2), new THREE.Vector3(dock.x + 1.8, dock.y - 1.3, dock.z - 0.9), 0x7c2d12);
   for (const x of [-2.4, 2.4]) {
     const chock = new THREE.Mesh(scaleUV(new THREE.BoxGeometry(0.22, 0.2, 0.5), 1, 1), yellow);
-    chock.position.set(dock.x + x, -3.65, dock.z + 2.0); e.station.interior.add(chock);
+    chock.position.set(dock.x + x, -3.65, dock.z + 2.0); bay.add(chock);
   }
   const board = new THREE.Mesh(new THREE.PlaneGeometry(3.6, 1), new THREE.MeshBasicMaterial({ map: labelTexture(['SHUTTLE · MONAD CONSTELLATION RUN', 'BOARD AT THE HATCH OR PRESS B'], { bg: '#0b0618', fg: '#c4b5fd', w: 1024, h: 284, font: 46, border: '#836ef9' }) }));
   board.position.set(-5.9, 1.6, -15);
   board.rotation.y = Math.PI / 2;
-  e.station.interior.add(board);
+  bay.add(board);
 
   // Launch: engines light, the hangar doors slide apart.
   // The sequence: engines spool up and the doors part, the ship lifts off the
@@ -137,8 +140,8 @@ export function installHangar(e: Engine) {
     e.say(`Welcome back from ${label}. Docking…`, 5);
     arriving = 0;
     hangarLeft.position.x = -doorX - 5.5; hangarRight.position.x = doorX + 5.5;
-    e.walker.pos.set(0, 0.4, -6.0);
-    e.walker.quat.setFromEuler(new THREE.Euler(-0.08, 0, 0));
+    e.walker.pos.copy(bay.localToWorld(new THREE.Vector3(0, 0.4, -6.0)));
+    e.walker.quat.setFromEuler(new THREE.Euler(-0.08, Math.PI / 2, 0)); // looking into the bay (world −x)
     window.history.replaceState(null, '', '/');
   }
   const parked = ship.group.position.clone();
@@ -167,9 +170,10 @@ export function installHangar(e: Engine) {
     if (e.mode.id === 'walk' && !ignited) {
       const w = e.walker;
       const half = LENGTH * 0.42, r = 1.1;
-      const c = ship.group.position;
-      const x = THREE.MathUtils.clamp(w.pos.x, c.x - half, c.x + half);
-      const near = new THREE.Vector3(x, c.y + 0.3, c.z);
+      const c = ship.group.getWorldPosition(new THREE.Vector3());
+      // Parked broadside, the hull runs along the world z axis.
+      const z = THREE.MathUtils.clamp(w.pos.z, c.z - half, c.z + half);
+      const near = new THREE.Vector3(c.x, c.y + 0.3, z);
       const d = w.pos.distanceTo(near), min = r + w.radius;
       if (d > 0 && d < min) {
         const n = new THREE.Vector3().subVectors(w.pos, near).divideScalar(d);
@@ -204,11 +208,16 @@ export function installHangar(e: Engine) {
   });
 
   // Framed from the gallery side with the ship on the left, clear of the planner panel.
-  const eye = new THREE.Vector3(dock.x + 0.5, dock.y + 1.6, dock.z + 8);
-  const aim = new THREE.Vector3(dock.x + 3.2, dock.y - 0.5, dock.z);
-  const cleanup = addPanelMode(e, 'shuttle', 'Shuttle', () => ({ eye, target: ignited ? ship.group.position : aim }));
+  const eyeLocal = new THREE.Vector3(dock.x + 0.5, dock.y + 1.6, dock.z + 8);
+  const aimLocal = new THREE.Vector3(dock.x + 3.2, dock.y - 0.5, dock.z);
+  const eye = new THREE.Vector3(), aim = new THREE.Vector3();
+  const cleanup = addPanelMode(e, 'shuttle', 'Shuttle', () => {
+    bay.localToWorld(eye.copy(eyeLocal));
+    if (ignited) ship.group.getWorldPosition(aim); else bay.localToWorld(aim.copy(aimLocal));
+    return { eye, target: aim };
+  });
   hotkey(e, 'KeyB', 'shuttle');
-  e.interactions.add({ id: 'shuttle', label: 'board the shuttle', position: parked.clone().add(new THREE.Vector3(0, 0.6, 2)), reach: 4, enabled: () => arriving < 0 && !ignited, use: () => e.setMode('shuttle') });
+  e.interactions.add({ id: 'shuttle', label: 'board the shuttle', position: bay.localToWorld(parked.clone().add(new THREE.Vector3(0, 0.6, 2))), reach: 4, enabled: () => arriving < 0 && !ignited, use: () => e.setMode('shuttle') });
   e.interactions.add({ id: 'hangar-console', label: 'plan a shuttle flight', position: e.station.anchors.hangarConsole.clone(), reach: 1.8, use: () => e.setMode('shuttle') });
   return cleanup;
 }
