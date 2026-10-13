@@ -22,7 +22,7 @@ export function TelescopeHUD({ engine, hud, catalogOpen }: { engine: Engine; hud
         <div><b>{fov}</b><span>field of view</span></div>
         <div><b>{hud.ra}</b><span>RA</span></div>
         <div><b>{hud.dec}</b><span>Dec</span></div>
-        <div className="focus"><span>focus</span><em><i style={{ left: `${hud.focus * 100}%` }} /></em></div>
+        <div className="focus"><span>autofocus</span><em><i style={{ left: `${hud.focus * 100}%` }} /></em></div>
         <div><b className={hud.tracking ? 'on' : ''}>{hud.slewing ? 'SLEWING' : hud.tracking ? 'TRACKING' : 'FREE'}</b><span>mount</span></div>
         <div><b className={hud.filter ? 'on' : ''}>{hud.filter ? 'IN' : 'OUT'}</b><span>solar filter</span></div>
       </div>
@@ -38,7 +38,7 @@ export function TelescopeHUD({ engine, hud, catalogOpen }: { engine: Engine; hud
           <ul>{hud.target.facts.map((f) => <li key={f}>{f}</li>)}</ul>
           {hud.target.token && (hud.target.resolved
             ? <p className="tel-next"><kbd>P</kbd> open its Nansen dossier on the PC · <kbd>B</kbd> plan a shuttle flight there</p>
-            : <p className="tel-next dim">Resolve it (zoom and focus) to open its dossier or plan a flight.</p>)}
+            : <p className="tel-next dim">Zoom in and let it autofocus to open its dossier or plan a flight.</p>)}
         </section>
       )}
 
@@ -63,7 +63,7 @@ export function TelescopeHUD({ engine, hud, catalogOpen }: { engine: Engine; hud
 
       <ul className="tel-keys">
         <li>mouse or <kbd>W A S D</kbd> aim · wheel or <kbd>+</kbd><kbd>−</kbd> zoom</li>
-        <li><kbd>[</kbd><kbd>]</kbd> focus · <kbd>T</kbd> track · <kbd>F</kbd> solar filter · <kbd>C</kbd> catalog</li>
+        <li>autofocus · <kbd>T</kbd> track · <kbd>F</kbd> solar filter · <kbd>C</kbd> catalog</li>
         <li><kbd>E</kbd> or <kbd>Esc</kbd> back to the station</li>
       </ul>
     </div>

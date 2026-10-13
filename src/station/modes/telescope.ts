@@ -3,9 +3,9 @@
 // near sky (Earth, Moon, Sun) at the eyepiece's field of view, with focus
 // blur, a little chromatic fringing and a round eyepiece edge.
 //
-// Keys: mouse aim, wheel or +/- zoom, [ ] focus, T track, F solar filter,
+// Keys: mouse aim, wheel or +/- zoom (autofocus), T track, F solar filter,
 // C catalog, E or Esc back to zero-g. Gamepad: sticks aim, triggers zoom,
-// bumpers focus, X track, Y exit.
+// bumpers unused, X track, Y exit.
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 import { glassSmudge, normalFromHeight, pbrSet, scaleUV } from '../world/pbr';
@@ -278,6 +278,10 @@ export function installTelescope(e: Engine) {
   // ---------- state ----------
   const aimQ = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, -1), new THREE.Vector3(1, 0.25, 0).normalize());
   let mag = 1, magTarget = 1, focus = 0.5, tracking = false, filter = false;
+  // Autofocus: when the view settles on something new (or the zoom changes), the camera waits a moment,
+  // then the focuser hunts: it overshoots, swings back and settles, like a real motor focuser.
+  const AF_DELAY = 0.7;
+  const af = { key: '', idle: 0, hunting: false, t: 0, from: 0.5, goal: 0.75, prevAim: new THREE.Quaternion() };
   let slew: { from: THREE.Quaternion; to: THREE.Quaternion; t0: number; dur: number; target: Target } | null = null;
   let lastPhase = 0;
   let current: Target | null = null;
@@ -360,7 +364,7 @@ export function installTelescope(e: Engine) {
       e.input.lock();
       lastPhase = e.sky.phase;
       e.sfx?.('motor-start');
-      if (e.log.add('telescope-first', 'discovery', 'First light', 'The observation telescope is yours. Scroll to zoom, [ and ] to focus, T to track.')) e.say('Telescope online. Scroll to zoom, [ ] to focus.');
+      if (e.log.add('telescope-first', 'discovery', 'First light', 'The observation telescope is yours. Scroll to zoom; it focuses itself. T to track.')) e.say('Telescope online. Scroll to zoom; autofocus does the rest.');
     },
     exit: () => {
       e.renderOverride = null;
@@ -392,8 +396,6 @@ export function installTelescope(e: Engine) {
       if (inp.down('Minus', 'NumpadSubtract') || inp.pad.buttons[PAD.LT]) magTarget *= Math.exp(-1.6 * dt);
       magTarget = THREE.MathUtils.clamp(magTarget, 1, MAX_MAG);
       mag = Math.exp(THREE.MathUtils.lerp(Math.log(mag), Math.log(magTarget), 1 - Math.exp(-5 * dt)));
-      if (inp.down('BracketLeft') || inp.padDown(PAD.LB)) focus = Math.max(0, focus - 0.18 * dt);
-      if (inp.down('BracketRight') || inp.padDown(PAD.RB)) focus = Math.min(1, focus + 0.18 * dt);
       if (inp.hit('KeyT') || inp.padHit(PAD.X)) { tracking = !tracking; e.sfx?.('click'); }
       if (inp.hit('KeyF')) { filter = !filter; e.sfx?.('click'); }
       if (inp.hit('KeyC')) api.catalogOpen = !api.catalogOpen;
@@ -427,12 +429,29 @@ export function installTelescope(e: Engine) {
         warning = `${current.name} is behind Earth right now. Wait for the orbit to carry it clear.`;
         current = catalog[0];
       }
+      // Autofocus runs on whatever is in the middle of the field.
+      {
+        const goal = current ? current.focus : 0.75;
+        const turned = af.prevAim.angleTo(aimQ) / Math.max(dt, 1e-3); // rad/s
+        af.prevAim.copy(aimQ);
+        const moving = !!slew || THREE.MathUtils.radToDeg(turned) > fovNow() * 0.04;
+        const key = `${current?.id ?? '-'}|${Math.round(Math.log(mag) * 5)}`;
+        if (moving || key !== af.key) { af.key = key; af.idle = 0; af.hunting = false; } else af.idle += dt;
+        af.goal = goal;
+        if (!af.hunting && af.idle > AF_DELAY && Math.abs(focus - goal) > 0.004) { af.hunting = true; af.t = 0; af.from = focus; }
+        if (af.hunting) {
+          af.t += dt;
+          focus = goal + (af.from - goal) * Math.exp(-2.4 * af.t) * Math.cos(6.2 * af.t);
+          if (af.t > 2.6) { focus = goal; af.hunting = false; }
+        }
+        focus = THREE.MathUtils.clamp(focus, 0, 1);
+      }
       if (current) {
         const sizeInField = current.kind === 'earth' ? 1 : current.size / fov;
         const sharp = Math.abs(focus - current.focus) < 0.08;
         if (current.kind === 'sun' && !filter) warning = 'Solar filter required. Press F before looking at the Sun.';
         else if (sizeInField < 0.04 && current.kind !== 'star') hint = `Zoom in on ${current.name}`;
-        else if (!sharp) hint = `Adjust focus ([ ]) to resolve ${current.name}`;
+        else if (!sharp) hint = `Autofocusing on ${current.name}…`;
         else {
           resolved = true;
           if (e.log.add(`seen-${current.id}`, 'discovery', current.name, current.facts[0])) { e.say(`✦ Discovered: ${current.name}`); e.sfx?.('discover'); }
