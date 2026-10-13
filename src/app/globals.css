@@ -373,3 +373,7 @@ kbd {
 }
 .to-station:hover { border-color: rgba(160, 140, 255, 0.7); color: #fff; }
 .fly-miss { position: fixed; left: 50%; top: 70px; transform: translateX(-50%); z-index: 30; max-width: 520px; margin: 0; padding: 10px 14px; border-radius: 10px; font-size: 13px; color: #ffe2a8; background: rgba(20, 12, 4, 0.8); border: 1px solid rgba(245, 197, 66, 0.4); cursor: pointer; }
+
+.near.station.dock { border-color: rgba(0,255,167,0.6); }
+.near.station .dock-btn { display: inline-flex; gap: 8px; align-items: center; margin-top: 6px; padding: 7px 12px; border-radius: 999px; font-weight: 600; font-size: 12px; text-decoration: none; color: #04110f; background: #00ffa7; }
+.near.station .dock-btn kbd { color: #04110f; border-color: rgba(4,17,15,0.4); }

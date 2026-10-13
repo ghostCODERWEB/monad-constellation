@@ -9,6 +9,7 @@
 import * as THREE from 'three';
 import { buildMoon, buildSun, buildWorld, type World } from '@/components/worlds';
 import type { WorldStyle } from '@/lib/worldStyle';
+import { buildMonadField, type MonadField } from './monadField';
 
 export const EARTH_R = 6371;
 export const ALTITUDE = 420;
@@ -37,6 +38,8 @@ export interface Sky {
   /** The Earth's frame: rotating it carries the ground beneath the station. */
   earthPivot: THREE.Group;
   moon: THREE.Mesh;
+  /** The distant Monad universe, fixed in the station frame, in view through the observation room's great window. */
+  monad: MonadField;
   sun: ReturnType<typeof buildSun>;
   sunPos: { value: THREE.Vector3 };
   /** Unit vector from the station toward the Sun, in station space. */
@@ -86,6 +89,9 @@ export function buildSky(): Sky {
   scene.add(inertial);
   inertial.add(new THREE.Points(sg, new THREE.PointsMaterial({ size: 1.8, sizeAttenuation: false, vertexColors: true, map: soft(), transparent: true, depthWrite: false })));
 
+  const monad = buildMonadField(800_000);
+  scene.add(monad.group);
+
   // Sun and Moon: placed to show their true apparent sizes (about half a degree).
   const sunPos = { value: new THREE.Vector3() };
   const sun = buildSun(1300);
@@ -108,11 +114,12 @@ export function buildSky(): Sky {
   const sunDir = new THREE.Vector3();
   const sunBase = new THREE.Vector3(0.92, 0, 0.39).normalize();
   const sky: Sky = {
-    scene, inertial, phase: 0, sunBase, camera, earth, earthPivot, moon, sun, sunPos, sunDir, sunlit: 1, earthDay: 1,
+    scene, inertial, phase: 0, sunBase, camera, earth, earthPivot, moon, monad, sun, sunPos, sunDir, sunlit: 1, earthDay: 1,
     update(t, camQuat, aspect, fov) {
       // The orbit: the Sun swings round the station once per orbit, and the
       // ground beneath slides past at the same rate.
-      const phase = (t / ORBIT_SECONDS) * Math.PI * 2;
+      // Start with the Sun overhead and lit; it swings past the great window (and the Monad universe) only late in the orbit.
+      const phase = (t / ORBIT_SECONDS) * Math.PI * 2 + Math.PI / 2;
       sky.phase = phase;
       inertial.rotation.z = phase;
       sunDir.copy(sunBase).applyAxisAngle(new THREE.Vector3(0, 0, 1), phase);

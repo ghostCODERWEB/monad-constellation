@@ -81,7 +81,10 @@ export default function Page() {
   const [notFound, setNotFound] = useState<string | null>(null);
   // Flying home reports the last world you were at, so the station can log the trip.
   const lastWorld = galaxy && selected?.type === 'planet' ? galaxy.planets[selected.index] : null;
-  const homeHref = lastWorld ? `/?from=${lastWorld.address}&sym=${encodeURIComponent(lastWorld.symbol)}` : '/';
+  // While flying, remember the last world you were over, so docking can log the trip.
+  const lastFlown = useRef<{ address: string; symbol: string } | null>(null);
+  if (hud?.world && galaxy) { const p = galaxy.planets[hud.world.planet]; lastFlown.current = { address: p.address, symbol: p.symbol }; }
+  const homeHref = flying && lastFlown.current ? `/?from=${lastFlown.current.address}&sym=${encodeURIComponent(lastFlown.current.symbol)}` : lastWorld ? `/?from=${lastWorld.address}&sym=${encodeURIComponent(lastWorld.symbol)}` : '/';
 
   // The heartbeat: poll the chain head; the scene interpolates between polls.
   useEffect(() => {
@@ -117,12 +120,13 @@ export default function Page() {
       if (e.key === 'Escape') { if (selected) select(null); else if (flying) toggleFlight(false); }
       else if (e.code === 'KeyF' && galaxy && introDone) toggleFlight(!flying);
       else if (e.code === 'KeyR' && flying) scene.current?.scan();
+      else if (e.code === 'KeyB' && flying && hud?.station.dockable) window.location.assign(homeHref);
       else if (e.code === 'KeyH' && !flying && galaxy) home();
       else if (e.code === 'KeyP' && timeline) play(!rep.playing);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [select, home, toggleFlight, flying, selected, galaxy, introDone, timeline, play, rep.playing]);
+  }, [select, home, toggleFlight, flying, selected, galaxy, introDone, timeline, play, rep.playing, hud?.station.dockable, homeHref]);
 
   const results = useMemo(() => {
     if (!galaxy || query.trim().length < 2) return [];
@@ -312,6 +316,13 @@ export default function Page() {
                 <div className={`speed ${hud?.boost ? 'boost' : ''}`}>
                   <b>{Math.round((hud?.speed ?? 0) * 10)}</b><span>{hud?.boost ? 'BOOST' : 'speed'}</span>
                   <i style={{ width: `${Math.min(100, ((hud?.speed ?? 0) / 75) * 100)}%` }} />
+                </div>
+                <div className={`near station ${hud?.station.dockable ? 'dock' : ''}`}>
+                  <span className="eyebrow">Orbital station</span>
+                  <b>{hud ? Math.round(hud.station.distance).toLocaleString() : '—'} u</b>
+                  {hud?.station.dockable
+                    ? <a className="dock-btn" href={homeHref}>Return to the station <kbd>B</kbd></a>
+                    : <span>fly closer to dock</span>}
                 </div>
                 {hud?.nearest && <div className="near"><span className="eyebrow">Nearest planet</span><b>{hud.nearest.name}</b><span>{hud.nearest.distance.toFixed(1)} u</span></div>}
               </div>

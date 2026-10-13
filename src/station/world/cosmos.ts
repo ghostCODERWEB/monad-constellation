@@ -10,6 +10,7 @@ import { NOISE, buildWorld, buildMoon, type World } from '@/components/worlds';
 import { worldStyle } from '@/lib/worldStyle';
 import { moonsOf } from '@/lib/moons';
 import type { Galaxy } from '@/lib/galaxy';
+import { monadDirection } from './monadField';
 
 export type TargetKind = 'token' | 'planet' | 'star' | 'nebula' | 'dark-nebula' | 'open-cluster' | 'globular' | 'spiral' | 'elliptical'
   | 'interacting' | 'group' | 'cluster' | 'deep-field' | 'black-hole' | 'remnant' | 'earth' | 'moon' | 'sun';
@@ -384,6 +385,9 @@ export function buildCosmos(): Cosmos {
   scene.background = new THREE.Color(0x000000);
   const sky = new THREE.Group();
   scene.add(sky);
+  // The Monad worlds are fixed in the station frame (they do not wheel with the orbit's stars).
+  const fixed = new THREE.Group();
+  scene.add(fixed);
   const targets: Cosmos['targets'] = [];
   const sunUniform = { value: new THREE.Vector3(1, 0, 0) };
   const timeUniform = { value: 0 };
@@ -525,11 +529,9 @@ export function buildCosmos(): Cosmos {
     order.forEach((pi, k) => {
       const p = galaxy.planets[pi];
       const style = worldStyle(p);
-      // The Monad Constellation sits round the orbit's pole: a direction there is
-      // never behind Earth, so the whole Monad universe is always in view.
-      const theta = THREE.MathUtils.degToRad(3 + 12 * Math.sqrt((k + 0.5) / order.length));
-      const phi = k * 2.39996;
-      const v = new THREE.Vector3(Math.sin(theta) * Math.cos(phi), Math.sin(theta) * Math.sin(phi), Math.cos(theta));
+      // The Monad universe hangs in the great window's direction, fixed in the station frame
+      // (see monadField.ts); the biggest markets sit nearest its heart.
+      const v = monadDirection(k, order.length);
       const lat = THREE.MathUtils.radToDeg(Math.asin(v.y));
       const lon = THREE.MathUtils.radToDeg(Math.atan2(-v.z, v.x));
       const arcsec = 20 + 18 * Math.max(0, Math.log10(Math.max(1e4, p.marketCap ?? 1e4) / 1e4));
@@ -539,7 +541,7 @@ export function buildCosmos(): Cosmos {
       const center = dir.clone().multiplyScalar(D);
       const w = buildWorld(style, R, center, sunPos, p.smartHolders > 0);
       w.group.userData.target = `token-${p.address}`;
-      sky.add(w.group);
+      fixed.add(w.group);
       // buildWorld bakes its centre for the shaders; it moves with the sky, so keep those in sync per frame.
       worlds.push(w);
       // Moons: the token's biggest real holders.
@@ -551,7 +553,7 @@ export function buildCosmos(): Cosmos {
       });
       const target: Target = {
         id: `token-${p.address}`, name: `$${p.symbol}`, kind: 'token', lon, lat, size,
-        distance: `Monad Constellation · ${style.biomeName}`, focus: 0.62,
+        distance: `Monad universe · ${style.biomeName} · far beyond the station`, focus: 0.62,
         token: { address: p.address, symbol: p.symbol, planet: pi },
         facts: [
           `${style.biomeName}: ${style.why}`,

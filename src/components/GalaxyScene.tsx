@@ -15,6 +15,7 @@ import type { Timeline, TradeEvent } from '@/lib/timeline';
 import { worldStyle, type WorldStyle } from '@/lib/worldStyle';
 import { moonsOf } from '@/lib/moons';
 import { buildShuttle } from './shuttle';
+import { buildStationBeacon } from './stationBeacon';
 import { buildMoon, buildSun, buildWorld, nebula, type World } from './worlds';
 
 export const KIND: Record<StarKind, { color: string; name: string }> = {
@@ -52,6 +53,8 @@ export interface FlightHud {
   nearest: { name: string; distance: number } | null;
   target: { focus: Focus; name: string; kind: string; distance: number } | null;
   world: ExpeditionHud | null;
+  /** The orbital station, far outside the universe: how far, and whether the shuttle is close enough to dock. */
+  station: { distance: number; dockable: boolean };
 }
 
 export interface ReplayState { t: number; playing: boolean }
@@ -651,6 +654,24 @@ const GalaxyScene = forwardRef<GalaxyHandle, Props>(function GalaxyScene({ galax
     const ship = buildShuttle();
     ship.group.visible = false;
     scene.add(ship.group);
+
+    // --- the orbital station, parked well outside the Monad universe ---------
+    const beacon = buildStationBeacon();
+    let reach = 0;
+    for (let i = 0; i < P; i++) reach = Math.max(reach, planetPos[i].length() + planetR[i]);
+    const stationPos = new THREE.Vector3(-0.55, 0.14, 0.82).normalize().multiplyScalar(Math.max(1100, reach * 2.6));
+    beacon.group.position.copy(stationPos);
+    // Its observation window looks back at the universe.
+    beacon.group.quaternion.setFromUnitVectors(new THREE.Vector3(1, 0, 0), stationPos.clone().negate().normalize());
+    scene.add(beacon.group);
+    const DOCK_R = 260;
+    const stationTag = document.createElement('div');
+    stationTag.className = 'slabel';
+    stationTag.innerHTML = '<i style="background:#836ef9"></i><b>Orbital station</b><span></span>';
+    const stationLabel = new CSS2DObject(stationTag);
+    stationLabel.position.copy(stationPos).add(new THREE.Vector3(0, 70, 0));
+    scene.add(stationLabel);
+    let tagAt = 0;
     const flight = {
       on: false,
       vel: new THREE.Vector3(),
@@ -661,6 +682,7 @@ const GalaxyScene = forwardRef<GalaxyHandle, Props>(function GalaxyScene({ galax
       target: null as Focus,
       boost: false,
     };
+    if (process.env.NODE_ENV === 'development') (window as unknown as { __galaxy: unknown }).__galaxy = { ship, flight, stationPos, camera };
     const fwd = new THREE.Vector3(), up = new THREE.Vector3(), tq = new THREE.Quaternion(), axis = new THREE.Vector3();
     const levelM = new THREE.Matrix4(), levelQ = new THREE.Quaternion(), ORIGIN = new THREE.Vector3();
 
@@ -961,6 +983,7 @@ const GalaxyScene = forwardRef<GalaxyHandle, Props>(function GalaxyScene({ galax
             nearest: near.planet >= 0 ? { name: `$${galaxy.planets[near.planet].symbol}`, distance: near.alt } : null,
             target: best && tp ? { focus: best, name: nameOf(best), kind: kindOf(best), distance: tp.distanceTo(pos) } : null,
             world,
+            station: { distance: pos.distanceTo(stationPos), dockable: pos.distanceTo(stationPos) < DOCK_R },
           });
         }
       }
@@ -997,6 +1020,13 @@ const GalaxyScene = forwardRef<GalaxyHandle, Props>(function GalaxyScene({ galax
       for (const m of moons) moonPos(m, time, m.mesh.position);
 
       if (flight.on) pilot(dt, time);
+      beacon.update(time, camera.position.distanceTo(stationPos));
+      if (time - tagAt > 0.3) {
+        tagAt = time;
+        const d = camera.position.distanceTo(stationPos);
+        (stationTag.lastElementChild as HTMLElement).textContent = d > 100 ? `${Math.round(d).toLocaleString()} u` : '';
+        stationLabel.visible = d > 140;
+      }
       if (!flight.on && time < 3.5 && !fly && !reduced) camera.position.lerpVectors(introFrom, introTo, ease(Math.min(1, time / 3.5)));
       if (flight.on) { /* the pilot owns the camera */ } else if (fly) {
         const k = ease(Math.min(1, (time - fly.t0) / 1.6));

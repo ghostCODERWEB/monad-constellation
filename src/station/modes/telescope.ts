@@ -84,7 +84,7 @@ export function installTelescope(e: Engine) {
   const catalog: Target[] = [...CATALOG];
   let tokensState: 'loading' | 'ready' | 'unavailable' = 'loading';
   fetch('/api/galaxy').then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
-    .then((g) => { catalog.push(...cosmos.addTokens(g)); tokensState = 'ready'; })
+    .then((g) => { catalog.push(...cosmos.addTokens(g)); e.sky.monad.set(g.planets); tokensState = 'ready'; })
     .catch(() => { tokensState = 'unavailable'; });
   const scopeCam = new THREE.PerspectiveCamera(BASE_FOV, 1, 1, 1e7);
   const skyCam = new THREE.PerspectiveCamera(BASE_FOV, 1, 1, 2e6);
@@ -292,6 +292,7 @@ export function installTelescope(e: Engine) {
     if (t.kind === 'earth') return out.set(0, -1, 0);
     if (t.kind === 'sun') return out.copy(e.sky.sunDir);
     if (t.kind === 'moon') return e.sky.moon.getWorldPosition(out).normalize();
+    if (t.kind === 'token') return out.copy(dirOf(t.lon, t.lat)); // the Monad universe is fixed in the station frame
     return out.copy(dirOf(t.lon, t.lat)).applyAxisAngle(rotZ, e.sky.phase);
   };
 
@@ -325,6 +326,7 @@ export function installTelescope(e: Engine) {
     const aspect = el.clientWidth / el.clientHeight;
     // The sky scene has its own camera handling: give it ours.
     e.sky.update(e.t, aimQ, aspect, fovNow());
+    e.sky.monad.setMag(mag);
     skyCam.quaternion.copy(aimQ);
     skyCam.fov = fovNow(); skyCam.aspect = aspect;
     skyCam.near = Math.max(1, Math.min(200, ALTITUDE * 0.2));
@@ -363,6 +365,7 @@ export function installTelescope(e: Engine) {
     },
     exit: () => {
       e.renderOverride = null;
+      e.sky.monad.setMag(1);
       e.sky.sun.group.children.forEach((c) => { c.visible = true; });
       e.hands.group.visible = true;
       e.sfx?.('motor-stop');
@@ -384,7 +387,7 @@ export function installTelescope(e: Engine) {
       // Tracking: follow the inertial sky as the station turns.
       const dPhase = e.sky.phase - lastPhase;
       lastPhase = e.sky.phase;
-      if (tracking && !slew) aimQ.premultiply(new THREE.Quaternion().setFromAxisAngle(rotZ, dPhase));
+      if (tracking && !slew && current?.kind !== 'token') aimQ.premultiply(new THREE.Quaternion().setFromAxisAngle(rotZ, dPhase));
       // Zoom: damped and logarithmic.
       if (inp.wheel) magTarget *= Math.pow(1.25, -inp.wheel);
       if (inp.down('Equal', 'NumpadAdd') || inp.pad.buttons[PAD.RT]) magTarget *= Math.exp(1.6 * dt);
