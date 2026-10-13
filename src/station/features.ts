@@ -6,6 +6,7 @@ import { installTelescope } from './modes/telescope';
 import { installHangar } from './features/hangar';
 import { installRobot } from './features/robot';
 import { installPC } from './features/pc';
+import { installTravel } from './features/travel';
 
 export function installFeatures(e: Engine) {
   const cleanups: (() => void)[] = [];
@@ -15,5 +16,6 @@ export function installFeatures(e: Engine) {
   run(installHangar);
   run(installRobot);
   run(installPC);
+  run(installTravel);
   return () => cleanups.forEach((f) => f());
 }

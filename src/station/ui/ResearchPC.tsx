@@ -5,7 +5,9 @@
 // /api/clusters, /api/reputation); the dossiers are the same ones the
 // Constellation shows. Selecting something scans it (credits); browsing lists
 // does not. Research only: no wallet, no trades.
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import * as THREE from 'three';
+import { mainScreenCorners } from '../features/pc';
 import type { Engine } from '../engine';
 import type { Galaxy } from '@/lib/galaxy';
 import type { ClusterReport } from '@/lib/clusters';
@@ -94,7 +96,32 @@ export function ResearchPC({ engine }: { engine: Engine }) {
     askAgent(engine, text);
   };
 
+  // The terminal is the monitor's screen: a fixed 1280×720 page, scaled and moved every frame to
+  // sit exactly on the main monitor's projected corners, so the 3D bezel and keyboard frame it.
+  const screenRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    let raf = 0;
+    const v = new THREE.Vector3();
+    const loop = () => {
+      raf = requestAnimationFrame(loop);
+      const el = screenRef.current, corners = mainScreenCorners(engine);
+      if (!el || !corners) return;
+      engine.camera.updateMatrixWorld();
+      const cv = engine.renderer.domElement.getBoundingClientRect();
+      const par = (el.offsetParent as HTMLElement | null)?.getBoundingClientRect() ?? cv;
+      const pts = corners.map((c) => { v.copy(c).project(engine.camera); return { x: (v.x * 0.5 + 0.5) * cv.width + cv.left - par.left, y: (0.5 - v.y * 0.5) * cv.height + cv.top - par.top, z: v.z }; });
+      if (pts.some((p) => p.z > 1)) { el.style.opacity = '0'; return; }
+      const [tl, tr, , bl] = pts;
+      const w = Math.hypot(tr.x - tl.x, tr.y - tl.y), h = Math.hypot(bl.x - tl.x, bl.y - tl.y);
+      el.style.transform = `translate(${tl.x}px, ${tl.y}px) scale(${w / 1280}, ${h / 720})`;
+      el.style.opacity = '1';
+    };
+    loop();
+    return () => cancelAnimationFrame(raf);
+  }, [engine]);
+
   return (
+    <div className="pc-screen" ref={screenRef} style={{ opacity: 0 }}>
     <section className="pc" aria-label="Research PC">
       <header>
         <img src="/brand/nansen-mark.gif" alt="" />
@@ -193,6 +220,8 @@ export function ResearchPC({ engine }: { engine: Engine }) {
         </aside>
       </div>
       <footer>Sources: Nansen API (token screener, TGM, profiler, smart money) via this station’s server · research only, not financial advice · no wallet connection, no trading</footer>
+      <div className="pc-glare" aria-hidden />
     </section>
+    </div>
   );
 }

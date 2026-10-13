@@ -35,8 +35,8 @@ export interface WalkerEvents {
   bump?: (speed: number) => void;
 }
 
-const THRUST = 0.9;   // m/s² from the suit's micro-thrusters
-const MAX = 2.6;      // a sensible indoor top speed, m/s
+const THRUST = 2.4;   // m/s² from the suit's micro-thrusters: brisk enough to cross a module in seconds
+const MAX = 3.8;      // a sensible indoor top speed, m/s
 const LOOK = 0.0022;
 
 export function createWalker(spawn: THREE.Vector3): Walker {
@@ -156,7 +156,7 @@ export function stepWalker(w: Walker, input: Input, dt: number, space: Space | n
 
   // Brake: grab the air (or, honestly, the thrusters fire against drift).
   if (input.down('KeyX') || input.padDown(PAD.B)) w.vel.multiplyScalar(Math.exp(-3.5 * dt));
-  if (w.assist && !w.grip && !mx && !my && !mz) w.vel.multiplyScalar(Math.exp(-0.35 * dt));
+  if (w.assist && !w.grip && !mx && !my && !mz) w.vel.multiplyScalar(Math.exp(-0.9 * dt));
   if (w.vel.length() > MAX && !w.grip) w.vel.setLength(THREE.MathUtils.lerp(w.vel.length(), MAX, 1 - Math.exp(-2 * dt)));
 
   if (input.hit('KeyV') || input.padHit(PAD.BACK)) w.assist = !w.assist;

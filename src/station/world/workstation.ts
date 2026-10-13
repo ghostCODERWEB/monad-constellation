@@ -125,10 +125,11 @@ export function buildWorkstation(anchor: THREE.Vector3) {
     const knuckle = new THREE.Mesh(new THREE.SphereGeometry(0.024, 20, 14), alu); knuckle.position.set(x * 0.65, y, 0.065); g.add(knuckle);
     const elbow = new THREE.Mesh(new THREE.SphereGeometry(0.02, 20, 14), alu); elbow.position.set(x, y, z - 0.035); g.add(elbow);
     screens.push({ c, g: c.getContext('2d')!, tex, title, w: px, h: py });
+    if (title === 'main') g.userData.mainScreen = { mesh: screen, w: w - 0.04, h: h - 0.04 };
   };
-  monitor(0.78, 0.36, 0, 0.5, 0.2, 0, 'main');
-  monitor(0.42, 0.3, -0.62, 0.5, 0.15, 0.32, 'left');
-  monitor(0.42, 0.3, 0.62, 0.5, 0.15, -0.32, 'right');
+  monitor(0.9, 0.5, 0, 0.52, 0.2, 0, 'main');
+  monitor(0.34, 0.26, -0.66, 0.5, 0.12, 0.34, 'left');
+  monitor(0.34, 0.26, 0.66, 0.5, 0.12, -0.34, 'right');
 
   // Keyboard and trackball, velcroed to the mat.
   const kb = keyboardTextures();

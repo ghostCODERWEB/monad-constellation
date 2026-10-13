@@ -496,7 +496,10 @@ export function buildStation(): Station {
 
   // ---------- doorways and modules ----------
   const door = (zone: string, axis: 'x' | 'z', a: number, b: number, half: number) => {
-    space.add(axis === 'x' ? box(`${zone}-door`, zone, [a, -half, -half], [b, half, half]) : box(`${zone}-door`, zone, [-half, -half, a], [half, half, b]));
+    // The player's centre must stay a body-radius inside a volume, so a doorway volume has to reach
+    // well into both rooms (at least two radii of overlap) or the hatch is impassable.
+    const lo = a - 0.7, hi = b + 0.7;
+    space.add(axis === 'x' ? box(`${zone}-door`, zone, [lo, -half, -half], [hi, half, half]) : box(`${zone}-door`, zone, [-half, -half, lo], [half, half, hi]));
     // The sleeve through the wall: four short plates, so no gap shows.
     const len = b - a, mid = (a + b) / 2;
     const along = axis === 'x' ? V(1, 0, 0) : V(0, 0, 1);

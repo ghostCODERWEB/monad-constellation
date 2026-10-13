@@ -16,8 +16,8 @@ import { addPanelMode, hotkey } from './panel';
 
 export interface Robot { talking: boolean; thinking: boolean }
 
-// Just right of the research hatch: the first thing you see when you wake up aboard.
-const HOME = new THREE.Vector3(1.5, 0.05, -1.3);
+// In the research module beside the workstation: the crew's research partner.
+const HOME = new THREE.Vector3(6.4, 0.0, -0.45);
 
 /** Nansen's animated mark, decoded into bitmaps; null until ready or where unsupported. */
 interface Gif { frames: ImageBitmap[]; times: number[]; length: number }
@@ -400,12 +400,10 @@ export function installRobot(e: Engine) {
   // ---------- talking ----------
   const eye = new THREE.Vector3();
   const cleanup = addPanelMode(e, 'agent', 'Nansen AI', () => {
-    // Face the robot from in front, and aim to its right so it sits in the
-    // left of the frame, clear of the chat panel on the right.
-    const fwd = new THREE.Vector3(Math.sin(group.rotation.y), 0, Math.cos(group.rotation.y));
-    eye.copy(group.position).addScaledVector(fwd, 1.25).add(new THREE.Vector3(0, 0.2, 0));
-    const camRight = new THREE.Vector3().crossVectors(fwd.clone().negate(), new THREE.Vector3(0, 1, 0)).normalize();
-    return { eye, target: group.position.clone().addScaledVector(camRight, 0.42).add(new THREE.Vector3(0, 0.12, 0)) };
+    // Face the robot from in front (the module is narrow, so the view is fixed, not along its heading),
+    // aiming to its right so it sits in the left of the frame, clear of the chat panel.
+    eye.copy(group.position).add(new THREE.Vector3(0, 0.2, 1.1));
+    return { eye, target: group.position.clone().add(new THREE.Vector3(0.4, 0.12, 0)) };
   });
   hotkey(e, 'KeyN', 'agent');
   e.interactions.add({ id: 'robot', label: 'talk to Nansen AI', position: group.position, reach: 2.6, use: () => e.setMode('agent') });

@@ -57,6 +57,11 @@ export function StationHUD({ engine, state }: { engine: Engine; state: EngineSta
           <button onClick={() => engine.setMode('pc')}>▣ Research PC <kbd>P</kbd></button>
           <button onClick={() => engine.setMode('shuttle')}>➤ Shuttle <kbd>B</kbd></button>
           <button onClick={() => engine.setMode('telescope')}>✦ Telescope</button>
+          <span className="st-rooms">
+            {([['hangar', 'Shuttle hangar', '1'], ['research', 'Research room', '2'], ['observation', 'Observation room', '3']] as const).map(([r, label, k]) => (
+              <button key={r} onClick={() => (engine as unknown as { travel: (r: string) => void }).travel(r)}>⇢ {label} <kbd>{k}</kbd></button>
+            ))}
+          </span>
         </nav>
       )}
 

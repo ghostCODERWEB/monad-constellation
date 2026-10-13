@@ -184,3 +184,12 @@
 .st-status { pointer-events: auto; }
 .st-subject { color: #00ffa7 !important; display: flex; align-items: center; gap: 6px; }
 .st-subject button { background: none; border: 0; padding: 0; color: #6fa591; cursor: pointer; font-size: 11px; }
+
+/* The research terminal drawn on the 3D monitor: a fixed 1280×720 page scaled onto the screen's corners. */
+.pc-screen { position: absolute; left: 0; top: 0; width: 1280px; height: 720px; transform-origin: 0 0; pointer-events: auto; z-index: 5; }
+.pc-screen .pc { position: absolute; inset: 0; border-radius: 0; border: 0; box-shadow: none; animation: none; background: #050b0b; font-size: 14px; }
+.pc-screen .pc::before { content: ''; position: absolute; inset: 0; z-index: 3; pointer-events: none; background: repeating-linear-gradient(to bottom, rgba(0,255,167,0.035) 0 1px, transparent 1px 3px); mix-blend-mode: screen; }
+.pc-screen .pc-glare { position: absolute; inset: 0; z-index: 4; pointer-events: none; background: linear-gradient(115deg, rgba(255,255,255,0.07) 0%, rgba(255,255,255,0) 32%), radial-gradient(ellipse at center, rgba(0,0,0,0) 62%, rgba(0,0,0,0.38) 100%); }
+
+.st-rooms { display: contents; }
+.st-rooms button { border-color: rgba(131,110,249,0.5); }
