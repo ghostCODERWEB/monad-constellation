@@ -26,12 +26,16 @@ export function ShuttlePanel({ engine }: { engine: Engine }) {
     }).catch((e) => setError(e.message));
   }, []);
 
+  // The world the crew is researching is the suggested destination.
+  const subject = engine.subject?.kind === 'token' ? engine.subject.address.toLowerCase() : null;
+  const seen = (p: Planet) => engine.log.has(`seen-token-${p.address}`);
   const list = useMemo(() => {
     const s = q.trim().toLowerCase().replace(/^\$/, '');
     return (planets ?? [])
       .filter((p) => !s || p.symbol.toLowerCase().includes(s) || p.address.toLowerCase().includes(s))
-      .sort((a, b) => (b.marketCap ?? 0) - (a.marketCap ?? 0));
-  }, [planets, q]);
+      .sort((a, b) => Number(b.address.toLowerCase() === subject) - Number(a.address.toLowerCase() === subject) || (b.marketCap ?? 0) - (a.marketCap ?? 0));
+  }, [planets, q, subject]);
+  const observed = (planets ?? []).filter(seen).length;
 
   useEffect(() => {
     if (!launching) return;
@@ -69,14 +73,16 @@ export function ShuttlePanel({ engine }: { engine: Engine }) {
           </div>
           {error && <p className="agent-err">Token worlds unavailable: {error}</p>}
           {!planets && !error && <p className="agent-wait">Charting the Monad Constellation from Nansen…</p>}
+          {planets && <p className="shuttle-count">{planets.length} token worlds · {observed} observed through the telescope</p>}
           <ul>
             {list.map((p) => {
               const st = worldStyle(p);
               return (
-                <li key={p.address}>
+                <li key={p.address} className={p.address.toLowerCase() === subject ? 'subject' : ''}>
+                  {p.address.toLowerCase() === subject && <span className="shuttle-why">Researching now ({engine.subject?.source === 'telescope' ? 'from the telescope' : engine.subject?.source === 'flight' ? 'your last flight' : 'from the PC'})</span>}
                   <button onClick={() => launch(p)}>
                     <i style={{ background: `radial-gradient(circle at 35% 35%, ${st.palette.low}, ${st.palette.deep})`, boxShadow: `0 0 10px ${st.palette.rim}66` }} />
-                    <span className="sym">${p.symbol}<em>{st.biomeName}</em></span>
+                    <span className="sym">${p.symbol}<em>{st.biomeName}{seen(p) ? ' · ✦ observed' : ''}</em></span>
                     <span className="num">{usd(p.marketCap)}<em>mcap</em></span>
                     <span className={`num ${(p.change24h ?? 0) >= 0 ? 'up' : 'down'}`}>{pct(p.change24h)}<em>24h</em></span>
                     <span className="go">Fly ➤</span>

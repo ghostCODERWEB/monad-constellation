@@ -5,11 +5,11 @@
 // tagged with its source and the Nansen tools the agent used. Nothing here
 // trades or touches a wallet: it is research only.
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import type { Engine } from '../engine';
+import type { Engine, Subject } from '../engine';
 import type { Robot } from '../features/robot';
 
-interface Msg { role: 'you' | 'ai'; text: string; tools: string[]; mode?: 'fast' | 'expert'; error?: string; done?: boolean }
-interface Status { connected: boolean; credits: { fast: number; expert: number }; cap: number }
+interface Msg { role: 'you' | 'ai'; text: string; tools: string[]; mode?: 'fast' | 'expert'; error?: string; done?: boolean; credits?: number; about?: string }
+interface Status { connected: boolean; credits: { fast: number; expert: number }; cap: number; remaining?: number }
 
 // The conversation outlives the panel: closing it and coming back keeps the thread.
 const memory: { msgs: Msg[]; conversationId: string | null; draft: string } = { msgs: [], conversationId: null, draft: '' };
@@ -75,11 +75,14 @@ export function AgentPanel({ engine }: { engine: Engine }) {
   const [text, setText] = useState(() => { const d = memory.draft; memory.draft = ''; return d; });
   const [expert, setExpert] = useState(false);
   const [busy, setBusy] = useState(false);
+  // The robot knows what you're researching aboard; you can drop that to ask in general.
+  const [about, setAbout] = useState<Subject | null>(engine.subject);
   const scroller = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLTextAreaElement>(null);
   const abort = useRef<AbortController | null>(null);
 
   useEffect(() => { fetch('/api/agent').then((r) => r.json()).then(setStatus).catch(() => setStatus({ connected: false, credits: { fast: 200, expert: 750 }, cap: 0 })); }, []);
+  const outOfQuestions = status?.remaining === 0;
   useEffect(() => { memory.msgs = msgs; scroller.current?.scrollTo({ top: scroller.current.scrollHeight }); }, [msgs]);
   useEffect(() => { input.current?.focus(); return () => { abort.current?.abort(); if (robot) { robot.talking = false; robot.thinking = false; } }; }, [robot]);
 
@@ -91,17 +94,21 @@ export function AgentPanel({ engine }: { engine: Engine }) {
     const mode = expert ? 'expert' : 'fast';
     setText('');
     setBusy(true);
-    setMsgs((all) => [...all, { role: 'you', text: q, tools: [] }, { role: 'ai', text: '', tools: [], mode }]);
+    setMsgs((all) => [...all, { role: 'you', text: q, tools: [], about: about?.label }, { role: 'ai', text: '', tools: [], mode }]);
     if (robot) robot.thinking = true;
     const ctl = new AbortController();
     abort.current = ctl;
     try {
-      const r = await fetch('/api/agent', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text: q, conversationId: memory.conversationId, expert }), signal: ctl.signal });
+      const r = await fetch('/api/agent', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text: q, conversationId: memory.conversationId, expert, subject: about ? { kind: about.kind, address: about.address, label: about.label } : null }), signal: ctl.signal });
       if (!r.ok || !r.body) {
         const j = await r.json().catch(() => ({}));
         patch((m) => ({ ...m, error: j.message ?? `The agent returned ${r.status}.`, done: true }));
         return;
       }
+      const charged = Number(r.headers.get('x-agent-credits') ?? 0) || undefined;
+      const left = r.headers.get('x-agent-remaining');
+      if (left != null) setStatus((st) => st && { ...st, remaining: Number(left) });
+      patch((m) => ({ ...m, credits: charged }));
       const reader = r.body.getReader();
       const dec = new TextDecoder();
       let buf = '';
@@ -131,6 +138,7 @@ export function AgentPanel({ engine }: { engine: Engine }) {
         }
       }
       patch((m) => ({ ...m, done: true }));
+      engine.log.add(`ask-${Date.now()}`, 'research', 'Asked Nansen AI', about ? `${q} (about ${about.label})` : q);
     } catch (err) {
       if ((err as Error).name !== 'AbortError') patch((m) => ({ ...m, error: (err as Error).message, done: true }));
     } finally {
@@ -163,13 +171,16 @@ export function AgentPanel({ engine }: { engine: Engine }) {
           <div className="agent-hello">
             <p>Hi, I’m the station’s Nansen AI. Ask me anything about Monad: tokens, smart money, wallets, flows. I answer with Nansen’s on-chain data.</p>
             <div className="agent-sugg">
-              {SUGGEST.map((s) => <button key={s} onClick={() => ask(s)} disabled={busy || status?.connected === false}>{s}</button>)}
+              {(about ? (about.kind === 'token'
+                ? [`What is smart money doing with ${about.label} right now?`, `Who are the biggest holders of ${about.label}, and are any connected?`, `What are the main risks for ${about.label}?`]
+                : [`What does the wallet ${about.label} trade, and is it profitable?`, `Which wallets is ${about.label} connected to?`, `What did ${about.label} buy or sell in the last week?`]
+              ) : SUGGEST).map((s) => <button key={s} onClick={() => ask(s)} disabled={busy || status?.connected === false}>{s}</button>)}
             </div>
           </div>
         )}
         {msgs.map((m, i) => (
           <article key={i} className={`agent-msg ${m.role}`}>
-            {m.role === 'you' ? <p>{m.text}</p> : (
+            {m.role === 'you' ? <p>{m.text}{m.about && <em className="agent-tag">re {m.about}</em>}</p> : (
               <>
                 {m.tools.length > 0 && <div className="agent-tools">{m.tools.map((t) => <span key={t}>⚙ {pretty(t)}</span>)}</div>}
                 {m.text ? <Rich text={m.text} /> : !m.error && <p className="agent-wait">{m.tools.length ? 'Querying Nansen data…' : 'Thinking…'}</p>}
@@ -179,7 +190,7 @@ export function AgentPanel({ engine }: { engine: Engine }) {
                     {/account' permission|insufficient_scope/.test(m.error) && <><br />Fix: open <a href="https://app.nansen.ai/api" target="_blank" rel="noreferrer">app.nansen.ai/api</a>, give this key the <b>account</b> permission (the Research Agent needs it), then ask again.</>}
                   </p>
                 )}
-                {m.done && !m.error && <footer>Source: Nansen Research Agent ({m.mode}) · research only, not financial advice</footer>}
+                {m.done && !m.error && <footer>Source: Nansen Research Agent ({m.mode}){m.credits ? ` · ${m.credits} credits` : ''} · research only, not financial advice</footer>}
               </>
             )}
           </article>
@@ -187,6 +198,12 @@ export function AgentPanel({ engine }: { engine: Engine }) {
       </div>
 
       <form onSubmit={(ev) => { ev.preventDefault(); ask(text); }}>
+        {about && (
+          <div className="agent-about">
+            About <b>{about.label}</b> <span>{about.source === 'telescope' ? 'from the telescope' : about.source === 'flight' ? 'your last flight' : 'from the PC'}</span>
+            <button type="button" onClick={() => setAbout(null)} title="Ask in general instead">✕</button>
+          </div>
+        )}
         <textarea
           ref={input} value={text} rows={2} maxLength={2000} placeholder="Ask about Monad…"
           onChange={(ev) => setText(ev.target.value)}
@@ -197,8 +214,8 @@ export function AgentPanel({ engine }: { engine: Engine }) {
           <label title="Expert runs deeper multi-step analysis; it costs more credits and takes longer.">
             <input type="checkbox" checked={expert} onChange={(ev) => setExpert(ev.target.checked)} /> Expert
           </label>
-          <span>{cost} Nansen credits a question</span>
-          {busy ? <button type="button" onClick={() => abort.current?.abort()}>Stop</button> : <button type="submit" disabled={!text.trim() || status?.connected === false}>Ask</button>}
+          <span>{cost} Nansen credits a question{status?.remaining != null ? ` · ${status.remaining} of ${status.cap} left today` : ''}</span>
+          {busy ? <button type="button" onClick={() => abort.current?.abort()}>Stop</button> : <button type="submit" disabled={!text.trim() || status?.connected === false || outOfQuestions}>Ask</button>}
         </div>
       </form>
     </section>

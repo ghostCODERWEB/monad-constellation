@@ -61,7 +61,7 @@ export interface TelescopeHud {
   focus: number;
   tracking: boolean;
   filter: boolean;
-  target: { id: string; name: string; distance: string; facts: string[]; kind: string; simulated?: boolean } | null;
+  target: { id: string; name: string; distance: string; facts: string[]; kind: string; simulated?: boolean; token?: { address: string; symbol: string }; resolved: boolean } | null;
   hint: string | null;
   warning: string | null;
   slewing: boolean;
@@ -199,6 +199,8 @@ export function installTelescope(e: Engine) {
   let slew: { from: THREE.Quaternion; to: THREE.Quaternion; t0: number; dur: number; target: Target } | null = null;
   let lastPhase = 0;
   let current: Target | null = null;
+  // Whether the current target is in focus and big enough to see: only then is it "observed".
+  let resolved = false;
   let hint: string | null = null, warning: string | null = null;
   let mountAz = 0, mountAlt = 0.2;
   const rotZ = new THREE.Vector3(0, 0, 1);
@@ -326,7 +328,7 @@ export function installTelescope(e: Engine) {
 
       // What is in the middle of the field?
       look.set(0, 0, -1).applyQuaternion(aimQ);
-      current = null; hint = null; warning = null;
+      current = null; hint = null; warning = null; resolved = false;
       let best = Infinity;
       const dir = new THREE.Vector3();
       for (const target of catalog) {
@@ -348,7 +350,18 @@ export function installTelescope(e: Engine) {
         if (current.kind === 'sun' && !filter) warning = 'Solar filter required. Press F before looking at the Sun.';
         else if (sizeInField < 0.04 && current.kind !== 'star') hint = `Zoom in on ${current.name}`;
         else if (!sharp) hint = `Adjust focus ([ ]) to resolve ${current.name}`;
-        else if (e.log.add(`seen-${current.id}`, 'discovery', current.name, current.facts[0])) { e.say(`✦ Discovered: ${current.name}`); e.sfx?.('discover'); }
+        else {
+          resolved = true;
+          if (e.log.add(`seen-${current.id}`, 'discovery', current.name, current.facts[0])) { e.say(`✦ Discovered: ${current.name}`); e.sfx?.('discover'); }
+        }
+      }
+      // A resolved token world becomes what the crew is researching; from the
+      // eyepiece it can go straight to the PC dossier or the flight planner.
+      if (resolved && current?.token) {
+        const tk = current.token;
+        e.setSubject({ kind: 'token', address: tk.address, label: `$${tk.symbol}`, source: 'telescope' });
+        if (inp.hit('KeyP')) { e.setMode('pc'); return; }
+        if (inp.hit('KeyB')) { e.setMode('shuttle'); return; }
       }
 
       // The instrument follows the aim, so it visibly slews.
@@ -371,7 +384,7 @@ export function installTelescope(e: Engine) {
       const fmt = (h: number) => `${Math.floor(h)}h ${Math.floor((h % 1) * 60).toString().padStart(2, '0')}m`;
       const hud: TelescopeHud = {
         mag, fov: fovNow(), ra: fmt(ra), dec: `${dec >= 0 ? '+' : '−'}${Math.abs(dec).toFixed(2)}°`, focus, tracking, filter,
-        target: current ? { id: current.id, name: current.name, distance: current.distance, facts: current.facts, kind: current.kind, simulated: current.simulated } : null,
+        target: current ? { id: current.id, name: current.name, distance: current.distance, facts: current.facts, kind: current.kind, simulated: current.simulated, token: current.token ? { address: current.token.address, symbol: current.token.symbol } : undefined, resolved } : null,
         hint, warning, slewing: !!slew,
         catalog: catalog.map((c) => ({ id: c.id, name: c.name, kind: c.kind, found: e.log.has(`seen-${c.id}`), hidden: false })),
         tokens: tokensState,

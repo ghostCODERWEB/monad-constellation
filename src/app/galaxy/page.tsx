@@ -76,7 +76,12 @@ export default function Page() {
     if (!want) return;
     const index = galaxy.planets.findIndex((p) => p.address.toLowerCase() === want);
     if (index >= 0) select({ type: 'planet', index });
+    else setNotFound(want);
   }, [galaxy, introDone, select]);
+  const [notFound, setNotFound] = useState<string | null>(null);
+  // Flying home reports the last world you were at, so the station can log the trip.
+  const lastWorld = galaxy && selected?.type === 'planet' ? galaxy.planets[selected.index] : null;
+  const homeHref = lastWorld ? `/?from=${lastWorld.address}&sym=${encodeURIComponent(lastWorld.symbol)}` : '/';
 
   // The heartbeat: poll the chain head; the scene interpolates between polls.
   useEffect(() => {
@@ -186,7 +191,12 @@ export default function Page() {
       {galaxy && <GalaxyScene ref={scene} galaxy={galaxy} focus={selected ?? hover} onHover={setHover} onSelect={select} onFlight={setHud} ties={ties} clusters={report?.clusters}
         timeline={timeline} onReplay={setRep} onTrade={onTrade} />}
 
-      <a className="to-station" href="/" title="Dock back at the orbital station">← Station</a>
+      <a className="to-station" href={homeHref} title="Dock back at the orbital station">← Station</a>
+      {notFound && (
+        <p className="fly-miss" role="status" onClick={() => setNotFound(null)}>
+          That token ({notFound.slice(0, 6)}…{notFound.slice(-4)}) isn’t one of today’s Constellation worlds, so the shuttle has nowhere to land. Showing the galaxy instead.
+        </p>
+      )}
       <header className={`title ${introDone ? 'small' : ''}`}>
         <h1>MONAD<span>CONSTELLATION</span></h1>
         {!introDone && <p>Every wallet a star. Every token a planet. Built from Nansen.</p>}

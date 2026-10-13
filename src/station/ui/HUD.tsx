@@ -38,6 +38,7 @@ export function StationHUD({ engine, state }: { engine: Engine; state: EngineSta
         <span className="st-sun">{state.sunlit > 0.5 ? '☀ orbital day' : '☾ orbital night'}</span>
         {state.gripping && <span className="st-chip">holding rail</span>}
         {state.holding && <span className="st-chip">holding {state.holding}</span>}
+        {state.subject && <span className="st-subject">◈ researching {state.subject.label}<button onClick={() => engine.setSubject(null)} aria-label="Clear">✕</button></span>}
       </div>}
 
       {state.toast && <div className="st-toast">{state.toast}</div>}

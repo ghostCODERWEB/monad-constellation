@@ -28,7 +28,11 @@ export interface Mode {
   hud?(): Record<string, unknown>;
 }
 
+/** What the crew is researching right now: set by the telescope, the PC or a return flight, read by the robot and the shuttle. */
+export interface Subject { kind: 'token' | 'wallet'; address: string; label: string; source: 'telescope' | 'pc' | 'flight' }
+
 export interface EngineState {
+  subject: Subject | null;
   mode: string;
   modeTitle: string;
   prompt: string | null;
@@ -71,6 +75,7 @@ export class Engine {
   private clock = new THREE.Clock();
   private toast: { text: string; until: number } | null = null;
   private el: HTMLElement;
+  subject: Subject | null = null;
   /** A mode can take over rendering entirely (the telescope eyepiece). */
   renderOverride: ((dt: number) => boolean) | null = null;
   /** Per-frame hooks for features: telescope motors, screens, eggs. */
@@ -137,6 +142,12 @@ export class Engine {
     this.input.reset();
     this.mode = next;
     next.enter(prev.id);
+    this.emit(true);
+  }
+
+  setSubject(s: Subject | null) {
+    if (s?.address === this.subject?.address && s?.source === this.subject?.source) return;
+    this.subject = s;
     this.emit(true);
   }
 
@@ -210,6 +221,7 @@ export class Engine {
     this.lastEmit = this.t;
     const w = this.walker;
     const s: EngineState = {
+      subject: this.subject,
       mode: this.mode.id,
       modeTitle: this.mode.title,
       prompt: this.mode.id === 'walk' && this.focus ? `Press E to ${Interactions.text(this.focus)}` : null,

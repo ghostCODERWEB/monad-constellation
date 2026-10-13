@@ -228,7 +228,41 @@ export function installRobot(e: Engine) {
     face.tex.needsUpdate = true;
   };
 
+  // It is solid: bump into it and it gets shoved aside, then its thrusters
+  // bring it back to its post (station-keeping), as a free-flyer would.
+  const offset = new THREE.Vector3(), drift = new THREE.Vector3();
+  const centre = new THREE.Vector3();
+  let greeted = false;
+
   e.tickers.push((dt, t) => {
+    if (e.mode.id === 'walk') {
+      const w = e.walker;
+      centre.copy(group.position).add(new THREE.Vector3(0, 0.1, 0));
+      const d = w.pos.distanceTo(centre), min = 0.42 + w.radius;
+      if (d > 0 && d < min) {
+        const n = new THREE.Vector3().subVectors(w.pos, centre).divideScalar(d);
+        w.pos.addScaledVector(n, min - d);
+        const into = -w.vel.dot(n);
+        if (into > 0) {
+          w.vel.addScaledVector(n, into * 1.4);
+          drift.addScaledVector(n, -into * 0.6);
+          if (into > 0.4) e.say('NANSEN AI: Careful, I’m holding position here!', 2.5);
+        }
+      }
+      // A friendly hello the first time you come close.
+      if (!greeted && d < 2.4) {
+        const look = new THREE.Vector3(0, 0, -1).applyQuaternion(w.quat);
+        if (look.dot(centre.clone().sub(w.pos).normalize()) > 0.8) {
+          greeted = true;
+          e.say('NANSEN AI: Hi! I answer with Nansen data on Monad. Press E to talk, or N from anywhere.', 5);
+        }
+      }
+    }
+    // Station-keeping: a damped spring back to its post.
+    drift.addScaledVector(offset, -3 * dt).multiplyScalar(Math.exp(-2.2 * dt));
+    offset.addScaledVector(drift, dt);
+    group.position.copy(HOME).add(offset);
+
     // Turn to face whoever is talking to it.
     toPlayer.subVectors(e.camera.position, group.position);
     const yaw = Math.atan2(toPlayer.x, toPlayer.z);
@@ -243,7 +277,7 @@ export function installRobot(e: Engine) {
     arms[0].rotation.x = Math.sin(t * (busy ? 3.2 : 0.9)) * (0.12 + busy * 0.35);
     arms[1].rotation.x = Math.sin(t * (busy ? 2.7 : 0.8) + 1.4) * (0.12 + busy * 0.3);
     ring.scale.setScalar(1 + Math.sin(t * 6) * 0.04);
-    (jet.material as THREE.MeshBasicMaterial).opacity = 0.12 + Math.abs(Math.sin(t * 9)) * 0.08;
+    (jet.material as THREE.MeshBasicMaterial).opacity = 0.12 + Math.abs(Math.sin(t * 9)) * 0.08 + Math.min(0.5, drift.length() * 2);
     hologram.rotation.y = t * 0.8;
     hologram.position.y = 0.72 + Math.sin(t * 1.6) * 0.02;
     (hologram.material as THREE.MeshBasicMaterial).opacity = robot.thinking ? 1 : 0.7;

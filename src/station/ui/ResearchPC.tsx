@@ -36,9 +36,20 @@ export function ResearchPC({ engine }: { engine: Engine }) {
       const j = await r.json();
       if (!r.ok) throw new Error(j.message ?? 'Galaxy data unavailable.');
       setGalaxy(j);
+      // Open on whatever the crew is researching (a world just seen in the telescope, say).
+      const subj = engine.subject;
+      if (subj) {
+        const g = j as Galaxy;
+        const pi = g.planets.findIndex((p) => p.address.toLowerCase() === subj.address.toLowerCase());
+        const si = pi < 0 ? g.stars.findIndex((w) => w.address.toLowerCase() === subj.address.toLowerCase()) : -1;
+        if (pi >= 0) { setTab('tokens'); setSel({ type: 'planet', index: pi }); }
+        else if (si >= 0) { setTab('wallets'); setSel({ type: 'star', index: si }); }
+      }
     }).catch((e) => setError(e.message));
     fetch('/api/clusters').then((r) => r.ok ? r.json() : null).then(setReport).catch(() => {});
     fetch('/api/reputation').then((r) => r.ok ? r.json() : null).then(setRepSet).catch(() => {});
+    // The station subject is read once, when the PC opens.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const addr = galaxy && sel ? (sel.type === 'planet' ? galaxy.planets[sel.index].address : galaxy.stars[sel.index].address) : null;
@@ -68,7 +79,12 @@ export function ResearchPC({ engine }: { engine: Engine }) {
     .filter(({ w }) => !s || w.name.toLowerCase().includes(s) || w.address.toLowerCase().includes(s) || w.labels.some((l) => l.toLowerCase().includes(s)))
     .sort((a, b) => b.w.brightness - a.w.brightness).slice(0, 300), [galaxy, s]);
 
-  const pick = (t: Sel) => setSel(t);
+  const pick = (t: Sel) => {
+    setSel(t);
+    if (!galaxy || !t) return;
+    if (t.type === 'planet') { const p = galaxy.planets[t.index]; engine.setSubject({ kind: 'token', address: p.address, label: `$${p.symbol}`, source: 'pc' }); }
+    else { const w = galaxy.stars[t.index]; engine.setSubject({ kind: 'wallet', address: w.address, label: w.name, source: 'pc' }); }
+  };
   const close = () => engine.setMode('walk');
   const ask = () => {
     if (!galaxy || !sel) return;

@@ -36,6 +36,9 @@ export function TelescopeHUD({ engine, hud, catalogOpen }: { engine: Engine; hud
           <b>{hud.target.name}</b>
           <em>{hud.target.distance}</em>
           <ul>{hud.target.facts.map((f) => <li key={f}>{f}</li>)}</ul>
+          {hud.target.token && (hud.target.resolved
+            ? <p className="tel-next"><kbd>P</kbd> open its Nansen dossier on the PC · <kbd>B</kbd> plan a shuttle flight there</p>
+            : <p className="tel-next dim">Resolve it (zoom and focus) to open its dossier or plan a flight.</p>)}
         </section>
       )}
 
