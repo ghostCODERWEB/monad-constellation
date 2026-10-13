@@ -10,6 +10,8 @@
 import * as THREE from 'three';
 import type { Engine } from '../engine';
 import { NANSEN_DARK, NANSEN_GREEN, NANSEN_GREEN_FOCUSED, NANSEN_MARK_PATH, NANSEN_MARK_VIEWBOX } from '../world/nansenMark';
+import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
+import { pbrSet, recolouredPaint, scaleUV } from '../world/pbr';
 import { addPanelMode, hotkey } from './panel';
 
 export interface Robot { talking: boolean; thinking: boolean }
@@ -107,70 +109,157 @@ export function installRobot(e: Engine) {
   if (!gif) loadGif('/brand/nansen-mark.gif');
   (e as unknown as { robot: Robot }).robot = robot;
 
-  const shell = new THREE.MeshPhysicalMaterial({ color: NANSEN_GREEN_FOCUSED, metalness: 0.55, roughness: 0.28, clearcoat: 1, clearcoatRoughness: 0.15, emissive: 0x053d2a, emissiveIntensity: 0.25 });
-  const dark = new THREE.MeshPhysicalMaterial({ color: NANSEN_DARK, metalness: 0.7, roughness: 0.35, clearcoat: 0.8 });
+  // Painted aluminium: the chipped-paint scan recoloured Nansen green (bare metal shows
+  // through the chips), under a clearcoat. Dark parts are carbon weave; trim is brushed metal.
+  const shell = pbrSet('painted-metal', { albedo: recolouredPaint(0x09c385), normal: 0.85, roughness: 0.9, clearcoat: 1, clearcoatRoughness: 0.07 });
+  shell.metalness = 0.55; // chips read as bare metal, not black holes
+  const dark = pbrSet('carbon-weave', { color: 0x8fd9c4, normal: 1.1, roughness: 0.85, clearcoat: 1, clearcoatRoughness: 0.12 });
+  const metal = pbrSet('brushed-aluminium', { color: 0xdfe5ea, normal: 0.7, roughness: 0.8 });
+  const rubber = pbrSet('rubber', { color: 0x1d2327, normal: 1.3 });
   const glow = new THREE.MeshBasicMaterial({ color: NANSEN_GREEN });
+  const R = (geo: THREE.BufferGeometry, u = 1, v = 1) => scaleUV(geo, u, v);
+  const bolt = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.0065, 0.0065, 0.006, 10), metal, 160);
+  let bolts = 0;
+  const mat4 = new THREE.Matrix4(), quat = new THREE.Quaternion(), UP = new THREE.Vector3(0, 1, 0);
+  /** A hex-head fastener lying on a surface: `n` is the surface normal. */
+  const addBolt = (parent: THREE.Object3D, p: THREE.Vector3, n: THREE.Vector3) => {
+    if (bolts >= 160) return;
+    quat.setFromUnitVectors(UP, n.clone().normalize());
+    parent.updateMatrixWorld();
+    bolt.setMatrixAt(bolts++, mat4.compose(p, quat, new THREE.Vector3(1, 1, 1)));
+  };
+  /** A thin dark groove ring: a panel seam. */
+  const seam = (radius: number, y: number, sx = 1, sz = 0.82) => {
+    const m = new THREE.Mesh(new THREE.TorusGeometry(radius, 0.0032, 6, 64), seamMat);
+    m.rotation.x = Math.PI / 2; m.position.y = y; m.scale.set(sx, sz, 1);
+    return m;
+  };
+  const seamMat = new THREE.MeshStandardMaterial({ color: 0x03100d, roughness: 0.9 });
 
   const group = new THREE.Group();
   group.position.copy(HOME);
   const body = new THREE.Group(); // bobs and leans; group turns to face the player
   group.add(body);
 
-  // Torso: a rounded capsule with a dark waist band and the animated emblem.
-  const torso = new THREE.Mesh(new THREE.CapsuleGeometry(0.2, 0.22, 8, 24), shell);
+  // Torso: painted capsule, with seam lines, an access plate, bolts and a rated nameplate.
+  const torso = new THREE.Mesh(R(new THREE.CapsuleGeometry(0.2, 0.22, 16, 48), 3, 3), shell);
   torso.scale.set(1, 1, 0.82);
   body.add(torso);
-  const band = new THREE.Mesh(new THREE.TorusGeometry(0.2, 0.025, 10, 40), dark);
+  for (const y of [-0.075, 0.185]) body.add(seam(0.2 * 1.001, y));
+  const midSeam = new THREE.Mesh(new THREE.TorusGeometry(0.201, 0.003, 6, 64, Math.PI), seamMat); // vertical split down the back
+  midSeam.rotation.y = Math.PI / 2; midSeam.scale.set(0.82, 1.6, 1); midSeam.position.y = 0.055;
+  body.add(midSeam);
+  const band = new THREE.Mesh(R(new THREE.TorusGeometry(0.2, 0.026, 20, 64), 8, 1), dark);
   band.rotation.x = Math.PI / 2; band.position.y = -0.12; band.scale.set(1, 0.82, 1);
   body.add(band);
+  for (let i = 0; i < 20; i++) { // bolts around the waist band
+    const a = (i / 20) * Math.PI * 2, rx = 0.2 + 0.002, rz = 0.164 + 0.002;
+    addBolt(body, new THREE.Vector3(Math.sin(a) * rx, -0.12 + 0.027, Math.cos(a) * rz), new THREE.Vector3(0, 1, 0));
+  }
   const emblem = canvasTex(256, 256);
-  const chest = new THREE.Mesh(new THREE.CircleGeometry(0.115, 48), new THREE.MeshBasicMaterial({ map: emblem.tex, transparent: true }));
+  // Emblem: a recessed bezel in brushed metal under a glass cover, over the live mark.
+  const bezel = new THREE.Mesh(R(new THREE.TorusGeometry(0.128, 0.011, 16, 64), 6, 1), metal);
+  bezel.position.set(0, 0.03, 0.168); body.add(bezel);
+  const chest = new THREE.Mesh(new THREE.CircleGeometry(0.119, 64), new THREE.MeshBasicMaterial({ map: emblem.tex, transparent: true }));
   chest.position.set(0, 0.03, 0.168);
   body.add(chest);
-  const chestRim = new THREE.Mesh(new THREE.TorusGeometry(0.118, 0.008, 8, 48), glow);
+  const chestGlass = new THREE.Mesh(new THREE.CircleGeometry(0.12, 64), new THREE.MeshPhysicalMaterial({ color: 0xffffff, transparent: true, opacity: 0.08, roughness: 0.03, clearcoat: 1, clearcoatRoughness: 0.02, depthWrite: false }));
+  chestGlass.position.set(0, 0.03, 0.172);
+  body.add(chestGlass);
+  const chestRim = new THREE.Mesh(new THREE.TorusGeometry(0.118, 0.006, 8, 64), glow);
   chestRim.position.copy(chest.position);
   body.add(chestRim);
+  for (let i = 0; i < 8; i++) { // bezel screws
+    const a = (i / 8) * Math.PI * 2 + 0.2;
+    addBolt(body, new THREE.Vector3(Math.sin(a) * 0.14, 0.03 + Math.cos(a) * 0.14, 0.166), new THREE.Vector3(0, 0, 1));
+  }
+  // Nameplate and decals below the emblem, screen-printed (transparent ground).
+  const decal = (lines: string[], w: number, h: number, size: number) => {
+    const c = document.createElement('canvas'); c.width = 512; c.height = Math.round(512 * (h / w));
+    const g = c.getContext('2d')!;
+    g.fillStyle = '#04120e'; g.textAlign = 'center'; g.font = `700 ${size}px "Helvetica Neue", Arial, sans-serif`;
+    lines.forEach((l, i) => g.fillText(l, 256, size + i * size * 1.2));
+    const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 16;
+    return new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshStandardMaterial({ map: t, transparent: true, roughness: 0.5, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2 }));
+  };
+  const nameplate = decal(['NANSEN AI', 'CREW UNIT NA-01'], 0.16, 0.05, 68);
+  nameplate.position.set(0, -0.085, 0.166); nameplate.rotation.x = 0.22; nameplate.scale.set(1, 1, 1);
+  body.add(nameplate);
+  const access = new THREE.Mesh(new RoundedBoxGeometry(0.075, 0.05, 0.008, 3, 0.004), metal); // access plate, left flank
+  access.position.set(-0.19, 0.0, 0.07); access.rotation.y = -1.15; body.add(access);
+  for (const [dx, dy] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
+    const o = new THREE.Vector3(-0.19, 0, 0.07).add(new THREE.Vector3(dx * 0.031 * Math.cos(1.15), dy * 0.019, dx * 0.031 * Math.sin(1.15)));
+    addBolt(body, o, new THREE.Vector3(-0.9, 0, 0.4));
+  }
 
-  // Head: a flattened sphere with a dark visor showing the face.
+  // Head: a painted shell with a recessed carbon visor frame, a glass cover and a green HUD face.
   const head = new THREE.Group();
   head.position.y = 0.36;
   body.add(head);
-  const skull = new THREE.Mesh(new THREE.SphereGeometry(0.17, 32, 24), shell);
+  const skull = new THREE.Mesh(R(new THREE.SphereGeometry(0.17, 64, 48), 3, 2), shell);
   skull.scale.set(1.15, 0.9, 1);
   head.add(skull);
+  head.add(seam(0.17, 0.02, 1.15, 1.0)); // equator seam
   const face = canvasTex(256, 128);
-  const visor = new THREE.Mesh(new THREE.SphereGeometry(0.172, 32, 16, -0.95 + Math.PI / 2, 1.9, Math.PI / 2 - 0.42, 0.84), new THREE.MeshBasicMaterial({ map: face.tex }));
+  const vSection = (r: number, phi = 1.9, th = 0.84, t0 = Math.PI / 2 - 0.42, p0 = -0.95 + Math.PI / 2) => new THREE.SphereGeometry(r, 48, 24, p0, phi, t0, th);
+  const frame = new THREE.Mesh(vSection(0.1715, 2.1, 1.0, Math.PI / 2 - 0.52, -1.05 + Math.PI / 2), dark); // chunky carbon frame behind the visor
+  frame.scale.copy(skull.scale);
+  head.add(frame);
+  const visor = new THREE.Mesh(vSection(0.1735), new THREE.MeshBasicMaterial({ map: face.tex }));
   visor.scale.copy(skull.scale);
   head.add(visor);
+  const visorGlass = new THREE.Mesh(vSection(0.1765), new THREE.MeshPhysicalMaterial({ color: 0x0a1f1a, transparent: true, opacity: 0.22, roughness: 0.02, metalness: 0, clearcoat: 1, clearcoatRoughness: 0.01, ior: 1.6, envMapIntensity: 2.4, depthWrite: false }));
+  visorGlass.scale.copy(skull.scale);
+  head.add(visorGlass);
   for (const s of [-1, 1]) {
-    const ear = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.05, 20), dark);
+    const ear = new THREE.Mesh(R(new THREE.CylinderGeometry(0.05, 0.05, 0.05, 32), 4, 1), metal);
     ear.rotation.z = Math.PI / 2; ear.position.x = s * 0.2;
     head.add(ear);
-    const light = new THREE.Mesh(new THREE.CircleGeometry(0.03, 16), glow);
+    const cap = new THREE.Mesh(R(new THREE.CylinderGeometry(0.054, 0.054, 0.014, 32), 6, 1), rubber);
+    cap.rotation.z = Math.PI / 2; cap.position.x = s * 0.178;
+    head.add(cap);
+    const light = new THREE.Mesh(new THREE.CircleGeometry(0.03, 24), glow);
     light.position.x = s * 0.226; light.rotation.y = s * Math.PI / 2;
     head.add(light);
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * Math.PI * 2;
+      addBolt(head, new THREE.Vector3(s * 0.2257, 0.36 + Math.cos(a) * 0.04, Math.sin(a) * 0.04), new THREE.Vector3(s, 0, 0));
+    }
   }
-  const antenna = new THREE.Mesh(new THREE.CylinderGeometry(0.006, 0.006, 0.12, 6), dark);
+  const antenna = new THREE.Mesh(R(new THREE.CylinderGeometry(0.006, 0.006, 0.12, 12), 1, 2), metal);
   antenna.position.set(0.06, 0.2, 0);
   head.add(antenna);
-  const tip = new THREE.Mesh(new THREE.SphereGeometry(0.018, 12, 10), glow);
+  const base = new THREE.Mesh(R(new THREE.CylinderGeometry(0.016, 0.02, 0.02, 20), 2, 1), dark);
+  base.position.set(0.06, 0.148, 0); head.add(base);
+  const tip = new THREE.Mesh(new THREE.SphereGeometry(0.018, 20, 14), glow);
   tip.position.set(0.06, 0.265, 0);
   head.add(tip);
 
-  // Arms: shoulder balls and two-part capsules that gesture while it talks.
+  // Arms: shoulder sockets with collars, painted upper arms, carbon elbows, gripping hands.
   const arms: THREE.Group[] = [];
   for (const s of [-1, 1]) {
     const arm = new THREE.Group();
     arm.position.set(s * 0.25, 0.12, 0);
-    const shoulder = new THREE.Mesh(new THREE.SphereGeometry(0.055, 16, 12), dark);
+    const shoulder = new THREE.Mesh(R(new THREE.SphereGeometry(0.055, 32, 24), 3, 2), dark);
     arm.add(shoulder);
-    const upper = new THREE.Mesh(new THREE.CapsuleGeometry(0.035, 0.14, 6, 12), shell);
+    const collar = new THREE.Mesh(R(new THREE.TorusGeometry(0.05, 0.007, 10, 40), 6, 1), metal);
+    collar.rotation.y = Math.PI / 2; collar.position.x = -s * 0.012; arm.add(collar);
+    const upper = new THREE.Mesh(R(new THREE.CapsuleGeometry(0.035, 0.14, 12, 28), 2, 2), shell);
     upper.position.y = -0.11;
     arm.add(upper);
-    const hand = new THREE.Mesh(new THREE.SphereGeometry(0.042, 14, 10), dark);
+    const elbow = new THREE.Mesh(R(new THREE.TorusGeometry(0.037, 0.008, 10, 32), 6, 1), dark);
+    elbow.rotation.x = Math.PI / 2; elbow.position.y = -0.065; arm.add(elbow);
+    const hand = new THREE.Mesh(R(new THREE.SphereGeometry(0.042, 32, 24), 3, 2), dark);
     hand.position.y = -0.23;
     arm.add(hand);
-    const cuff = new THREE.Mesh(new THREE.TorusGeometry(0.038, 0.007, 6, 20), glow);
+    for (let f = 0; f < 3; f++) { // rubber-tipped finger pads
+      const a = (f / 3) * Math.PI * 2 + (s > 0 ? 0 : 1);
+      const fin = new THREE.Mesh(R(new THREE.CapsuleGeometry(0.009, 0.026, 6, 12), 1, 2), rubber);
+      fin.position.set(Math.cos(a) * 0.026, -0.265, Math.sin(a) * 0.026);
+      fin.rotation.set(Math.sin(a) * 0.5, 0, -Math.cos(a) * 0.5);
+      arm.add(fin);
+    }
+    const cuff = new THREE.Mesh(new THREE.TorusGeometry(0.038, 0.006, 8, 32), glow);
     cuff.rotation.x = Math.PI / 2; cuff.position.y = -0.19;
     arm.add(cuff);
     arm.rotation.z = s * 0.25;
@@ -178,16 +267,29 @@ export function installRobot(e: Engine) {
     arms.push(arm);
   }
 
-  // Thruster ring underneath: it lives in zero-g like everyone else.
-  const ring = new THREE.Mesh(new THREE.TorusGeometry(0.12, 0.018, 10, 40), glow);
-  ring.rotation.x = Math.PI / 2; ring.position.y = -0.33;
+  // Thruster module underneath: a carbon cowl with vents, and the glowing ring.
+  const cowl = new THREE.Mesh(R(new THREE.CylinderGeometry(0.135, 0.095, 0.05, 40, 1, true), 5, 1), dark);
+  cowl.position.y = -0.31; cowl.material = (dark.clone() as THREE.MeshPhysicalMaterial); (cowl.material as THREE.MeshPhysicalMaterial).side = THREE.DoubleSide;
+  body.add(cowl);
+  for (let i = 0; i < 12; i++) {
+    const a = (i / 12) * Math.PI * 2;
+    const vent = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.003, 0.014), seamMat);
+    vent.position.set(Math.sin(a) * 0.118, -0.31, Math.cos(a) * 0.118);
+    vent.rotation.y = a; vent.rotation.x = -0.4;
+    body.add(vent);
+  }
+  const ring = new THREE.Mesh(new THREE.TorusGeometry(0.1, 0.014, 12, 48), glow);
+  ring.rotation.x = Math.PI / 2; ring.position.y = -0.345;
   body.add(ring);
   const jet = new THREE.Mesh(new THREE.ConeGeometry(0.1, 0.22, 24, 1, true), new THREE.MeshBasicMaterial({ color: NANSEN_GREEN, transparent: true, opacity: 0.18, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }));
   jet.rotation.x = Math.PI; jet.position.y = -0.45;
   body.add(jet);
-  const lamp = new THREE.PointLight(NANSEN_GREEN, 0.3, 1.6, 2);
-  lamp.position.set(0, -0.2, 0.25);
+  const lamp = new THREE.PointLight(NANSEN_GREEN, 0.5, 1.8, 2);
+  lamp.position.set(0, -0.5, 0.6);
   body.add(lamp);
+
+  bolt.count = bolts;
+  body.add(bolt);
 
   // Hologram: the mark spinning above its head, brighter while it thinks.
   const holo = canvasTex(256, 256);

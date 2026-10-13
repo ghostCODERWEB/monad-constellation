@@ -119,3 +119,7 @@ Sixteen endpoints. Everything is cached on disk under `.cache/`, so a restart co
 Next.js 15 and Three.js, no game engine: GPU-animated orbits for every star, procedural shaders for
 the sun, terrain, clouds and atmosphere, CSS2D labels, bloom. Contracts in Solidity 0.8.24, compiled
 with solc-js and tested on @ethereumjs/vm.
+
+## Texture credits
+
+Surface scans in `public/textures/` are CC0 1.0 from [ambientCG](https://ambientcg.com): Metal009 (brushed aluminium), Fabric004 (carbon weave), PaintedMetal004 (painted metal, recoloured in code), Fabric081C (fabric weave), DiamondPlate008C (diamond plate), Concrete034 (hangar floor) and Rubber004 (rubber). Quilted beta-cloth blankets, glass smudges and light diffusers are generated procedurally in `src/station/world/pbr.ts`.

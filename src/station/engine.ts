@@ -6,7 +6,7 @@ import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
-import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
+import { interiorEnvironment } from './world/envInterior';
 import { Input } from './core/input';
 import { Interactions, type Interactable } from './core/interact';
 import { MissionLog } from './core/log';
@@ -95,8 +95,8 @@ export class Engine {
     this.camera = new THREE.PerspectiveCamera(72, el.clientWidth / el.clientHeight, 0.03, 4000);
     this.scene.add(this.camera);
     const pm = new THREE.PMREMGenerator(this.renderer);
-    this.scene.environment = pm.fromScene(new RoomEnvironment(), 0.04).texture;
-    this.scene.environmentIntensity = 0.22;
+    this.scene.environment = pm.fromScene(interiorEnvironment(), 0.03).texture;
+    this.scene.environmentIntensity = 0.55;
 
     this.sky = buildSky();
     this.station = buildStation();
