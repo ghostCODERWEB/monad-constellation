@@ -741,9 +741,12 @@ const GalaxyScene = forwardRef<GalaxyHandle, Props>(function GalaxyScene({ galax
     };
     labels.domElement.addEventListener('pointermove', onFlyDrag);
 
+    let shipSurfaces = false;
     api.current.setFlying = (on) => {
       if (on === flight.on) return;
       flight.on = on;
+      // The full spacecraft surfaces (painted hull, thermal tiles, foil) are built the first time you fly, not at page load.
+      if (on && !shipSurfaces) { shipSurfaces = true; import('@/station/world/shuttlePbr').then((m) => ship.applyMaterials(m.shuttleMaterials())).catch(() => {}); }
       flight.keys.clear();
       if (on) {
         // Launch from just in front of the current view, facing the same way.
@@ -882,6 +885,7 @@ const GalaxyScene = forwardRef<GalaxyHandle, Props>(function GalaxyScene({ galax
         (pl.material as THREE.MeshBasicMaterial).color.setHSL(0.72 - burn * 0.12, 0.85, 0.5 + burn * 0.3);
       });
       for (const b of ship.blinkers) b.mesh.visible = ((now + b.phase) % 1.2) < 0.18;
+      ship.setControl(flight.spin.x / 1.6, flight.spin.z / 2.8, flight.spin.y / 1.8); // elevons and rudder follow the stick
 
       // Streaks: anchored to the camera, rushing backwards faster with speed.
       streaks.visible = speedK > 0.12;
@@ -1062,6 +1066,8 @@ const GalaxyScene = forwardRef<GalaxyHandle, Props>(function GalaxyScene({ galax
       }
       // Depth precision: pull the near plane in as surfaces get close.
       camera.near = THREE.MathUtils.clamp(camNear.alt * 0.25, 0.03, 8);
+      // Flying, the shuttle rides 2–3 units in front of the camera: a far near-plane (open space) would clip the ship away.
+      if (flight.on) camera.near = Math.min(camera.near, 0.25);
       camera.updateProjectionMatrix();
       bloom.strength = 0.7 - inside * 0.45;
 

@@ -203,6 +203,23 @@ export function wingMaterial() {
   return new THREE.MeshPhysicalMaterial({ map, normalMap, roughness: 0.42, metalness: 0.18, clearcoat: 0.45, clearcoatRoughness: 0.25, side: THREE.DoubleSide });
 }
 
+/** Wing undersides: black thermal tiles in a grid, each a slightly different tone, with dark gaps. */
+export function wingUnderMaterial() {
+  const N = 1024, T = 64;
+  const A = mk(N, N), B = mk(N, N), R = mk(N, N);
+  const a = A.g, h = B.g, r = R.g, rand = rng(1717);
+  a.fillStyle = '#050506'; a.fillRect(0, 0, N, N); h.fillStyle = '#2a2a2a'; h.fillRect(0, 0, N, N); r.fillStyle = 'rgb(225,225,225)'; r.fillRect(0, 0, N, N);
+  for (let y = 0; y < N; y += T) for (let x = 0; x < N; x += T) {
+    const tone = 18 + Math.floor(rand() * 20), scorch = rand() < 0.05 ? 30 : 0;
+    a.fillStyle = `rgb(${tone + scorch},${tone + scorch},${tone + scorch + 4})`; a.fillRect(x + 3, y + 3, T - 6, T - 6);
+    h.fillStyle = `rgb(${150 + Math.floor(rand() * 20)},150,150)`; h.fillRect(x + 4, y + 4, T - 8, T - 8);
+    r.fillStyle = `rgb(${200 + Math.floor(rand() * 40)},${200 + Math.floor(rand() * 40)},210)`; r.fillRect(x + 3, y + 3, T - 6, T - 6);
+  }
+  const map = tex(A.c, true, true), normalMap = tex(normalFromHeight(B.c, 3), false, true), roughnessMap = tex(R.c, false, true);
+  for (const t of [map, normalMap, roughnessMap]) t.repeat.set(2, 5);
+  return new THREE.MeshPhysicalMaterial({ map, normalMap, roughnessMap, roughness: 1, metalness: 0.05, clearcoat: 0.1 });
+}
+
 /** Gold Kapton blanket: crumpled foil with aluminium-tape seams. */
 export function foilMaterial() {
   const N = 1024;
@@ -254,5 +271,5 @@ export function shuttleMaterials(): ShuttleMaterials {
   violet.metalness = 0.4;
   const chrome = pbrSet('brushed-aluminium', { color: 0xe8e4f4, normal: 0.6, roughness: 0.55 });
   const canopy = new THREE.MeshPhysicalMaterial({ color: 0x050d1c, metalness: 0.1, roughness: 0.015, clearcoat: 1, clearcoatRoughness: 0.01, envMapIntensity: 3.4, ior: 1.55, transparent: true, opacity: 0.94, emissive: 0x0b3a52, emissiveIntensity: 0.18 });
-  return { paint: hullMaterial(), wing: wingMaterial(), violet, nacelle: foilMaterial(), bell: bellMaterial(), chrome, canopy };
+  return { paint: hullMaterial(), wing: wingMaterial(), wingBottom: wingUnderMaterial(), violet, nacelle: foilMaterial(), bell: bellMaterial(), chrome, canopy };
 }

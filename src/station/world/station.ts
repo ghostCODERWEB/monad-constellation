@@ -562,7 +562,7 @@ export function buildStation(): Station {
     const cabPlate = new THREE.Mesh(new THREE.PlaneGeometry(0.4, 0.2), new THREE.MeshStandardMaterial({ map: plateTexture(['FIRE', 'EXTINGUISHER'], { bg: '#f5f5f5', w: 512, h: 256, font: 70 }), roughness: 0.5 }));
     cabPlate.rotation.y = -Math.PI / 2; cabPlate.position.set(HG.x - 0.19, -0.35, HG.z1 - 1.2); add(cabPlate);
     const beacon = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.14, 0.2, 24), new THREE.MeshStandardMaterial({ color: 0xffb020, emissive: 0xff8a00, emissiveIntensity: 0.9, roughness: 0.3 }));
-    beacon.position.set(0, HG.y - 0.3, HG.z0 + 0.7); add(beacon);
+    beacon.name = 'bay-beacon'; beacon.position.set(0, HG.y - 0.3, HG.z0 + 0.7); add(beacon);
     for (const [x, y] of [[-3, 2.5], [3, 2.5]]) {
       const l = new THREE.PointLight(0xe0e8ff, 10, 26, 2);
       l.position.set(x, y, cz);

@@ -127,7 +127,7 @@
 .shuttle footer { padding: 10px 16px; font-size: 10.5px; color: #8f88b4; border-top: 1px solid rgba(160,140,255,0.15); }
 .shuttle-launch { flex: 1; display: grid; place-content: center; text-align: center; gap: 8px; }
 .shuttle-launch span { color: #c4b5fd; letter-spacing: 0.1em; text-transform: uppercase; font-size: 12px; }
-.shuttle-launch b { font: 700 96px 'Space Grotesk', system-ui; background: linear-gradient(180deg, #fff, #836ef9); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.shuttle-launch b { font: 700 40px 'Space Grotesk', system-ui; background: linear-gradient(180deg, #fff, #836ef9); -webkit-background-clip: text; background-clip: text; color: transparent; }
 .shuttle-launch em { color: #f5c542; font-style: normal; font-size: 12px; }
 @media (prefers-reduced-motion: reduce) { .agent, .shuttle, .agent-mark, .st-dock img { animation: none; } }
 .agent-msg a { color: #00ffa7; text-decoration: none; border-bottom: 1px solid rgba(0,255,167,0.35); }
@@ -193,3 +193,9 @@
 
 .st-rooms { display: contents; }
 .st-rooms button { border-color: rgba(131,110,249,0.5); }
+
+/* While the shuttle launches, the planner shrinks to a status strip so the launch can be watched. */
+.shuttle.launching { inset: auto 24px 24px auto !important; width: min(420px, calc(100vw - 48px)) !important; height: auto !important; padding: 14px 18px !important; }
+.shuttle.launching > header { display: none; }
+.shuttle.launching .shuttle-launch { flex: none; gap: 4px; }
+.shuttle.launching .shuttle-launch b { font: 700 28px 'Space Grotesk', system-ui; }

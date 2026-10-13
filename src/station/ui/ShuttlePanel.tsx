@@ -16,7 +16,7 @@ export function ShuttlePanel({ engine }: { engine: Engine }) {
   const [error, setError] = useState<string | null>(null);
   const [q, setQ] = useState('');
   const [launching, setLaunching] = useState<Planet | 'free' | null>(null);
-  const [count, setCount] = useState(3);
+  const [stage, setStage] = useState('Pre-launch checks');
 
   useEffect(() => {
     fetch('/api/galaxy').then(async (r) => {
@@ -37,24 +37,25 @@ export function ShuttlePanel({ engine }: { engine: Engine }) {
   }, [planets, q, subject]);
   const observed = (planets ?? []).filter(seen).length;
 
+  // While the shuttle launches, follow its stage names.
   useEffect(() => {
     if (!launching) return;
-    if (count === 0) {
-      window.location.href = launching === 'free' ? '/galaxy' : `/galaxy?fly=${launching.address}`;
-      return;
-    }
-    const id = setTimeout(() => setCount((c) => c - 1), 750);
-    return () => clearTimeout(id);
-  }, [launching, count]);
+    const hangar = (engine as unknown as { hangar?: { stage(): { label: string } } }).hangar;
+    const id = setInterval(() => setStage(hangar?.stage().label ?? ''), 150);
+    return () => clearInterval(id);
+  }, [launching, engine]);
 
   const launch = (to: Planet | 'free') => {
-    setLaunching(to); setCount(3);
-    (engine as unknown as { hangar?: { ignite(): void } }).hangar?.ignite();
+    setLaunching(to);
+    // The shuttle runs its launch sequence; when it has cleared the station, the flight continues in the galaxy.
+    (engine as unknown as { hangar?: { ignite(done?: () => void): void } }).hangar?.ignite(() => {
+      window.location.href = to === 'free' ? '/galaxy' : `/galaxy?fly=${to.address}`;
+    });
     engine.log.add(`flight-${to === 'free' ? 'free' : to.address}`, 'flight', to === 'free' ? 'Free flight' : `Flight to $${to.symbol}`, 'The shuttle left the hangar for the Monad Constellation.');
   };
 
   return (
-    <section className="shuttle" aria-label="Shuttle flight planner">
+    <section className={`shuttle ${launching ? 'launching' : ''}`} aria-label="Shuttle flight planner">
       <header>
         <div><b>Shuttle</b><span>Flight planner · the Monad Constellation</span></div>
         <button className="agent-x" onClick={() => engine.setMode('walk')} aria-label="Close">✕</button>
@@ -62,8 +63,7 @@ export function ShuttlePanel({ engine }: { engine: Engine }) {
       {launching ? (
         <div className="shuttle-launch">
           <span>{launching === 'free' ? 'Free flight' : `Destination $${launching.symbol}`}</span>
-          <b>{count > 0 ? count : 'Launch'}</b>
-          <em>Hangar doors open · main engines lit</em>
+          <b>{stage}</b>
         </div>
       ) : (
         <>
