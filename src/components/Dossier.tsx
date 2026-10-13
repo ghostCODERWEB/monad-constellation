@@ -3,6 +3,7 @@
 import { useMemo } from 'react';
 import type { Galaxy, Planet, Star } from '@/lib/galaxy';
 import type { TokenProfile, WalletProfile } from '@/lib/profile';
+import type { Cluster } from '@/lib/clusters';
 import { KIND } from './GalaxyScene';
 import { worldStyle } from '@/lib/worldStyle';
 import { moonsOf } from '@/lib/moons';
@@ -58,7 +59,7 @@ function Ring({ value, label }: { value: number; label: string }) {
   );
 }
 
-export function PlanetView({ p, galaxy, token, onStar }: { p: Planet; galaxy: Galaxy; token: TokenProfile | null | undefined; onStar: (i: number) => void }) {
+export function PlanetView({ p, galaxy, token, clusters, onStar }: { p: Planet; galaxy: Galaxy; token: TokenProfile | null | undefined; clusters: Cluster[]; onStar: (i: number) => void }) {
   const pi = galaxy.planets.indexOf(p);
   const orbiting = useMemo(() => galaxy.stars
     .map((s, i) => ({ s, i, l: s.links.find((l) => l.p === pi) }))
@@ -85,6 +86,8 @@ export function PlanetView({ p, galaxy, token, onStar }: { p: Planet; galaxy: Ga
         {p.state === 'falling' && <span className="tag red">down {Math.round(-(p.change7d ?? 0))}% this week</span>}
         {p.state === 'flagged' && <span className="tag red">flagged by Nansen</span>}
       </div>
+
+      {clusters.filter((c) => c.planet === pi).map((c) => <ClusterCard key={c.id} c={c} galaxy={galaxy} onStar={onStar} />)}
 
       <h4>World survey <small>every feature is a number</small></h4>
       <ul className="survey">
@@ -174,9 +177,9 @@ export function PlanetView({ p, galaxy, token, onStar }: { p: Planet; galaxy: Ga
   );
 }
 
-export function StarView({ s, galaxy, wallet, deep, starIndex, planetIndex, onPlanet, onStar }: {
+export function StarView({ s, galaxy, wallet, deep, starIndex, planetIndex, clusters, onPlanet, onStar }: {
   s: Star; galaxy: Galaxy; wallet: WalletProfile | null | undefined; deep: boolean;
-  starIndex: Map<string, number>; planetIndex: Map<string, number>;
+  starIndex: Map<string, number>; planetIndex: Map<string, number>; clusters: Cluster[];
   onPlanet: (i: number) => void; onStar: (i: number) => void;
 }) {
   const links = [...s.links].sort((a, b) => (b.holdingUsd + Math.abs(b.pnlUsd ?? 0)) - (a.holdingUsd + Math.abs(a.pnlUsd ?? 0)));
@@ -187,6 +190,8 @@ export function StarView({ s, galaxy, wallet, deep, starIndex, planetIndex, onPl
       <h2 className="wallet">{s.name}</h2>
       <a className="addr" href={`https://app.nansen.ai/profiler?address=${s.address}&chain=monad`} target="_blank" rel="noreferrer">{short(s.address)} · open in Nansen ↗</a>
       {s.labels.length > 0 && <div className="tags">{[...new Set(s.labels)].slice(0, 6).map((l) => <span key={l} className="tag">{l}</span>)}</div>}
+
+      {clusters.filter((c) => c.members.includes(galaxy.stars.indexOf(s))).map((c) => <ClusterCard key={c.id} c={c} galaxy={galaxy} onStar={onStar} self={galaxy.stars.indexOf(s)} />)}
 
       {deep && wallet === undefined && <p className="note scanning">Scanning with seven Nansen profiler endpoints…</p>}
 
@@ -324,5 +329,35 @@ export function StarView({ s, galaxy, wallet, deep, starIndex, planetIndex, onPl
         })}
       </ul>
     </>
+  );
+}
+
+/** An insider cluster: who, how much of the supply, and the evidence. */
+function ClusterCard({ c, galaxy, onStar, self }: { c: Cluster; galaxy: Galaxy; onStar: (i: number) => void; self?: number }) {
+  const sym = galaxy.planets[c.planet].symbol;
+  return (
+    <div className={`cluster ${c.severity}`}>
+      <span className="eyebrow">⚠ Insider cluster · {c.kind === 'funded' ? 'funded together' : 'transfer ring'}</span>
+      <b>{(c.share * 100).toFixed(1)}% of ${sym} <small>· {money(c.holdingUsd)}</small></b>
+      <p>{c.evidence}</p>
+      {c.funder && (
+        <button className="funder" onClick={() => c.funder!.star != null && onStar(c.funder!.star)} disabled={c.funder.star == null}>
+          Funder: {c.funder.name}{c.funder.star != null ? ' ✦' : ''}
+        </button>
+      )}
+      <ul className="people">
+        {c.members.map((m) => {
+          const st = galaxy.stars[m];
+          const share = st.links.find((l) => l.p === c.planet)?.share ?? 0;
+          return (
+            <li key={m}><button onClick={() => onStar(m)} disabled={m === self}>
+              <i style={{ background: KIND[st.kind].color }} /><span>{st.name}{m === self ? ' (this wallet)' : ''}</span>
+              <b>{(share * 100).toFixed(2)}%</b>
+            </button></li>
+          );
+        })}
+      </ul>
+      <p className="note">Source: first funders from Nansen profiler/address/related-wallets; transfers from tgm/transfers. A shared funder is a signal, not proof.</p>
+    </div>
   );
 }

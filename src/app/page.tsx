@@ -4,6 +4,7 @@ import dynamic from 'next/dynamic';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Galaxy } from '@/lib/galaxy';
 import type { TokenProfile, WalletProfile } from '@/lib/profile';
+import type { ClusterReport } from '@/lib/clusters';
 import { PlanetView, StarView } from '@/components/Dossier';
 import { KIND, type FlightHud, type Focus, type GalaxyHandle, type Tie } from '@/components/GalaxyScene';
 
@@ -19,6 +20,8 @@ export default function Page() {
   const [introDone, setIntroDone] = useState(false);
   const [flying, setFlying] = useState(false);
   const [hud, setHud] = useState<FlightHud | null>(null);
+  const [report, setReport] = useState<ClusterReport | null>(null);
+  const [radarOpen, setRadarOpen] = useState(true);
   const scene = useRef<GalaxyHandle>(null);
   // Deep dossiers, keyed by address. undefined = loading, null = failed.
   const [wallets, setWallets] = useState<Record<string, WalletProfile | null | undefined>>({});
@@ -30,6 +33,8 @@ export default function Page() {
       if (!r.ok) throw new Error(j.message ?? 'The galaxy could not be built.');
       setGalaxy(j);
       setTimeout(() => setIntroDone(true), 3800);
+      // Tracing first funders is slower than the galaxy, so it follows it.
+      fetch('/api/clusters').then((r) => r.ok ? r.json() : null).then((c) => c && setReport(c)).catch(() => {});
     }).catch((e) => setError(e.message));
   }, []);
 
@@ -94,21 +99,27 @@ export default function Page() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selAddr]);
 
-  // Lines in the galaxy from the selected wallet to the wallets it deals with.
+  // Lines in the galaxy from the selected wallet to the wallets it deals with,
+  // and to the rest of any insider cluster it belongs to.
   const ties = useMemo<Tie[]>(() => {
     if (selected?.type !== 'star' || !selAddr) return [];
-    const w = wallets[selAddr];
-    if (!w) return [];
-    const maxV = Math.max(1, ...w.counterparties.map((c) => c.volumeUsd));
     const out: Tie[] = [];
+    for (const c of report?.clusters ?? []) {
+      if (!c.members.includes(selected.index)) continue;
+      for (const m of c.members) if (m !== selected.index) out.push({ star: m, kind: 'cluster', weight: 1 });
+      if (c.funder?.star != null && c.funder.star !== selected.index) out.push({ star: c.funder.star, kind: 'cluster', weight: 1 });
+    }
+    const w = wallets[selAddr];
+    if (!w) return out;
+    const maxV = Math.max(1, ...w.counterparties.map((c) => c.volumeUsd));
     for (const r of w.related) { const i = starIndex.get(r.address); if (i != null) out.push({ star: i, kind: 'related', weight: 1 }); }
     for (const c of w.counterparties) { const i = starIndex.get(c.address); if (i != null && i !== selected.index) out.push({ star: i, kind: 'counterparty', weight: Math.sqrt(c.volumeUsd / maxV) }); }
     return out;
-  }, [selected, selAddr, wallets, starIndex]);
+  }, [selected, selAddr, wallets, starIndex, report]);
 
   return (
     <main>
-      {galaxy && <GalaxyScene ref={scene} galaxy={galaxy} focus={selected ?? hover} onHover={setHover} onSelect={select} onFlight={setHud} ties={ties} />}
+      {galaxy && <GalaxyScene ref={scene} galaxy={galaxy} focus={selected ?? hover} onHover={setHover} onSelect={select} onFlight={setHud} ties={ties} clusters={report?.clusters} />}
 
       <header className={`title ${introDone ? 'small' : ''}`}>
         <h1>MONAD<span>CONSTELLATION</span></h1>
@@ -123,6 +134,29 @@ export default function Page() {
 
       {galaxy && introDone && (
         <>
+          {!flying && (
+            <section className={`radar ${radarOpen ? '' : 'closed'}`} aria-label="Insider radar">
+              <button className="radar-head" onClick={() => setRadarOpen((o) => !o)} aria-expanded={radarOpen}>
+                <b>Insider radar</b>
+                <span>{report ? `${report.clusters.length} clusters · ${report.checked} holders traced` : 'Tracing first funders…'}</span>
+              </button>
+              {radarOpen && report && (
+                <ul>
+                  {report.clusters.map((c) => (
+                    <li key={c.id}>
+                      <button onClick={() => select({ type: 'planet', index: c.planet })}>
+                        <i className={c.severity} />
+                        <b>${galaxy.planets[c.planet].symbol}</b>
+                        <span>{(c.share * 100).toFixed(1)}%</span>
+                        <em>{c.kind === 'funded' ? `${c.members.length} wallets, one funder` : `${c.members.length} wallets trading in a ring`}{c.alsoIn.length ? ` · also in ${c.alsoIn.length} more` : ''}</em>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+          )}
+
           <div className="search">
             <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Find a token, wallet, ENS or label…" aria-label="Search the galaxy" />
             {results.length > 0 && (
@@ -137,10 +171,10 @@ export default function Page() {
           {shown && (
             <aside className="dossier" key={`${shown.type}${shown.index}`}>
               {shown.type === 'planet'
-                ? <PlanetView p={galaxy.planets[shown.index]} galaxy={galaxy} token={tokens[galaxy.planets[shown.index].address]} onStar={(i) => select({ type: 'star', index: i })} />
+                ? <PlanetView p={galaxy.planets[shown.index]} galaxy={galaxy} token={tokens[galaxy.planets[shown.index].address]} clusters={report?.clusters ?? []} onStar={(i) => select({ type: 'star', index: i })} />
                 : <StarView s={galaxy.stars[shown.index]} galaxy={galaxy} wallet={wallets[galaxy.stars[shown.index].address]}
                     deep={!!selected && selected.type === 'star' && selected.index === shown.index}
-                    starIndex={starIndex} planetIndex={planetIndex}
+                    starIndex={starIndex} planetIndex={planetIndex} clusters={report?.clusters ?? []}
                     onPlanet={(i) => select({ type: 'planet', index: i })} onStar={(i) => select({ type: 'star', index: i })} />}
               {selected && <button className="close" onClick={() => select(null)} aria-label="Back to the galaxy">✕</button>}
             </aside>

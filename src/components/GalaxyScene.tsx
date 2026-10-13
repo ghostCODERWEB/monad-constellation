@@ -10,6 +10,7 @@ import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { CSS2DObject, CSS2DRenderer } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import type { Galaxy, StarKind } from '@/lib/galaxy';
+import type { Cluster } from '@/lib/clusters';
 import { worldStyle, type WorldStyle } from '@/lib/worldStyle';
 import { moonsOf } from '@/lib/moons';
 import { buildShuttle } from './shuttle';
@@ -29,7 +30,7 @@ export const KIND: Record<StarKind, { color: string; name: string }> = {
 export type Focus = { type: 'planet'; index: number } | { type: 'star'; index: number } | null;
 
 /** A line drawn from the selected star to another star: a counterparty or a related wallet. */
-export interface Tie { star: number; kind: 'counterparty' | 'related'; weight: number }
+export interface Tie { star: number; kind: 'counterparty' | 'related' | 'cluster'; weight: number }
 
 export interface ExpeditionHud {
   planet: number;
@@ -59,6 +60,8 @@ interface Props {
   focus: Focus;
   /** Lines from the focused star to the wallets it deals with. */
   ties?: Tie[];
+  /** Insider clusters: drawn as red tethers from the shared funder. */
+  clusters?: Cluster[];
   onHover: (f: Focus) => void;
   onSelect: (f: Focus) => void;
   onFlight?: (h: FlightHud | null) => void;
@@ -131,12 +134,12 @@ function orbitPos(o: Orbit, t: number, out: THREE.Vector3) {
   return out.set(o.center.x + x, o.center.y + y, o.center.z + z);
 }
 
-const GalaxyScene = forwardRef<GalaxyHandle, Props>(function GalaxyScene({ galaxy, focus, ties, onHover, onSelect, onFlight }, ref) {
+const GalaxyScene = forwardRef<GalaxyHandle, Props>(function GalaxyScene({ galaxy, focus, ties, clusters, onHover, onSelect, onFlight }, ref) {
   const mount = useRef<HTMLDivElement>(null);
   const cb = useRef({ onHover, onSelect, onFlight });
   cb.current = { onHover, onSelect, onFlight };
-  const api = useRef<{ flyTo(f: Focus): void; setFocus(f: Focus): void; setTies(t: Tie[]): void; setFlying(on: boolean): void; scan(): void }>({
-    flyTo: () => {}, setFocus: () => {}, setTies: () => {}, setFlying: () => {}, scan: () => {},
+  const api = useRef<{ flyTo(f: Focus): void; setFocus(f: Focus): void; setTies(t: Tie[]): void; setClusters(c: Cluster[]): void; setFlying(on: boolean): void; scan(): void }>({
+    flyTo: () => {}, setFocus: () => {}, setTies: () => {}, setClusters: () => {}, setFlying: () => {}, scan: () => {},
   });
   useImperativeHandle(ref, () => ({
     flyTo: (f) => api.current.flyTo(f),
@@ -144,8 +147,12 @@ const GalaxyScene = forwardRef<GalaxyHandle, Props>(function GalaxyScene({ galax
     scan: () => api.current.scan(),
   }));
 
+  // Props can arrive before the scene exists; the scene reads these once it does.
+  const latest = useRef({ focus, ties, clusters });
+  latest.current = { focus, ties, clusters };
   useEffect(() => { api.current.setFocus(focus); }, [focus]);
   useEffect(() => { api.current.setTies(ties ?? []); }, [ties]);
+  useEffect(() => { api.current.setClusters(clusters ?? []); }, [clusters]);
 
   useEffect(() => {
     const el = mount.current!;
@@ -416,6 +423,50 @@ const GalaxyScene = forwardRef<GalaxyHandle, Props>(function GalaxyScene({ galax
     scene.add(tieLines);
     let tieList: Tie[] = [];
     api.current.setTies = (t) => { tieList = t.slice(0, TMAX); };
+
+    // --- insider clusters: red tethers from each shared funder to the
+    // holders it seeded, a pulsing core at the funder, halos on the members.
+    interface Knot { c: Cluster; virtual: THREE.Vector3 | null; halo: THREE.Sprite; label: CSS2DObject; color: THREE.Color }
+    let knots: Knot[] = [];
+    const KMAX = 160;
+    const knotPos = new Float32Array(KMAX * 6), knotCol = new Float32Array(KMAX * 6);
+    const knotGeo = new THREE.BufferGeometry();
+    knotGeo.setAttribute('position', new THREE.BufferAttribute(knotPos, 3));
+    knotGeo.setAttribute('color', new THREE.BufferAttribute(knotCol, 3));
+    const knotLines = new THREE.LineSegments(knotGeo, new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
+    knotLines.frustumCulled = false;
+    knotLines.renderOrder = 15;
+    scene.add(knotLines);
+    const memberPos = new Float32Array(KMAX * 3), memberCol = new Float32Array(KMAX * 3);
+    const memberGeo = new THREE.BufferGeometry();
+    memberGeo.setAttribute('position', new THREE.BufferAttribute(memberPos, 3));
+    memberGeo.setAttribute('color', new THREE.BufferAttribute(memberCol, 3));
+    const memberHalos = new THREE.Points(memberGeo, new THREE.PointsMaterial({ size: 2.4 * S, map: soft, vertexColors: true, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
+    memberHalos.frustumCulled = false;
+    memberHalos.renderOrder = 15;
+    scene.add(memberHalos);
+    const knotCore = (k: Knot, out: THREE.Vector3) => k.c.funder?.star != null && !k.c.members.includes(k.c.funder.star) ? starPos(k.c.funder.star, out) : out.copy(k.virtual!);
+    api.current.setClusters = (list) => {
+      for (const k of knots) { scene.remove(k.halo); scene.remove(k.label); k.halo.material.dispose(); }
+      knots = list.map((c, j) => {
+        const color = new THREE.Color(c.severity === 'high' ? '#ef4444' : '#f59e0b');
+        // Without a known funder star, the core floats above the world it targets.
+        const ang = j * 2.4;
+        const R = planetR[c.planet];
+        const virtual = planetPos[c.planet].clone().add(new THREE.Vector3(Math.cos(ang) * R * 1.4, R * 1.9, Math.sin(ang) * R * 1.4));
+        const halo = new THREE.Sprite(new THREE.SpriteMaterial({ map: soft, color, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true }));
+        halo.renderOrder = 16;
+        scene.add(halo);
+        const div = document.createElement('div');
+        div.className = `klabel ${c.severity}`;
+        div.innerHTML = `<b>⚠ ${c.kind === 'funded' ? 'Funded together' : 'Transfer ring'}</b><span>${(c.share * 100).toFixed(1)}% of $${esc(galaxy.planets[c.planet].symbol)} · ${c.members.length} wallets</span>`;
+        div.addEventListener('click', (e) => { e.stopPropagation(); cb.current.onSelect({ type: 'star', index: c.members[0] }); });
+        const label = new CSS2DObject(div);
+        label.visible = false;
+        scene.add(label);
+        return { c, virtual, halo, label, color };
+      });
+    };
 
     // --- selection marker and fly-to.
     const markTex = (() => {
@@ -830,6 +881,11 @@ const GalaxyScene = forwardRef<GalaxyHandle, Props>(function GalaxyScene({ galax
       for (const t of scanTags) if (t.star >= 0) { starPos(t.star, t.o.position).y += 0.5; t.o.visible = !occluded(t.o.position); }
     };
 
+    // Apply whatever arrived while the scene was being built.
+    api.current.setFocus(latest.current.focus);
+    api.current.setTies(latest.current.ties ?? []);
+    api.current.setClusters(latest.current.clusters ?? []);
+
     // The first view: arrive from deep space.
     const introFrom = new THREE.Vector3(0, 260 * S, 420 * S), introTo = camera.position.clone();
     camera.position.copy(introFrom);
@@ -910,11 +966,42 @@ const GalaxyScene = forwardRef<GalaxyHandle, Props>(function GalaxyScene({ galax
           tiePos.set([va.x, va.y, va.z, vb.x, vb.y, vb.z], i * 6);
           const pulse = 0.55 + 0.45 * Math.sin(time * 3 - i * 0.7);
           const w = (0.35 + t.weight * 0.65) * pulse;
-          const col = t.kind === 'related' ? [0.13, 0.83, 0.93] : [0.96, 0.77, 0.26];
+          const col = t.kind === 'related' ? [0.13, 0.83, 0.93] : t.kind === 'cluster' ? [0.97, 0.27, 0.27] : [0.96, 0.77, 0.26];
           tieCol.set([col[0] * w, col[1] * w, col[2] * w, col[0] * w * 0.5, col[1] * w * 0.5, col[2] * w * 0.5], i * 6);
         });
         tieGeo.attributes.position.needsUpdate = true;
         tieGeo.attributes.color.needsUpdate = true;
+      }
+
+      // Insider clusters.
+      {
+        let seg = 0, mem = 0;
+        const pulse = 0.6 + 0.4 * Math.sin(time * 2.2);
+        for (const k of knots) {
+          knotCore(k, va);
+          const R = planetR[k.c.planet];
+          k.halo.position.copy(va);
+          k.halo.scale.setScalar(R * (0.5 + 0.12 * pulse));
+          const camD = camera.position.distanceTo(planetPos[k.c.planet]);
+          const focused = focusNow?.type === 'planet' && focusNow.index === k.c.planet || focusNow?.type === 'star' && k.c.members.includes(focusNow.index);
+          k.label.visible = (camD < R * 16 || focused) && !occluded(va);
+          k.label.position.copy(va).add(tmp.set(0, R * 0.35, 0));
+          for (const m of k.c.members) {
+            if (seg >= KMAX || mem >= KMAX) break;
+            starPos(m, vb);
+            const w = (focused ? 1 : 0.55) * pulse;
+            knotPos.set([va.x, va.y, va.z, vb.x, vb.y, vb.z], seg * 6);
+            knotCol.set([k.color.r * w, k.color.g * w, k.color.b * w, k.color.r * w * 0.6, k.color.g * w * 0.6, k.color.b * w * 0.6], seg * 6);
+            seg++;
+            memberPos.set([vb.x, vb.y, vb.z], mem * 3);
+            memberCol.set([k.color.r * pulse, k.color.g * pulse, k.color.b * pulse], mem * 3);
+            mem++;
+          }
+        }
+        knotGeo.setDrawRange(0, seg * 2);
+        memberGeo.setDrawRange(0, mem);
+        knotGeo.attributes.position.needsUpdate = true; knotGeo.attributes.color.needsUpdate = true;
+        memberGeo.attributes.position.needsUpdate = true; memberGeo.attributes.color.needsUpdate = true;
       }
 
       // Comets.
