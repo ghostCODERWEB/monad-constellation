@@ -9,7 +9,8 @@ import * as THREE from 'three';
 import { Space, box, cyl } from '../core/space';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 import { labelTexture, panelBump, panelTexture, patchTexture, rackTexture, type RackKind } from './textures';
-import { blanketMaterial, glassSmudge, lightDiffuser, pbrSet, plateTexture, scaleUV, tileUV } from './pbr';
+import { RACK_MODULES, blanketMaterial, glassSmudge, lightDiffuser, pbrSet, plateTexture, rackModule, scaleUV, tileUV } from './pbr';
+import { buildWorkstation } from './workstation';
 
 export interface Rail { a: THREE.Vector3; b: THREE.Vector3 }
 
@@ -79,6 +80,7 @@ export function buildStation(): Station {
     color: 0xc4dcff, transparent: true, opacity: 0.1, roughness: 1, roughnessMap: glassSmudge(), metalness: 0,
     clearcoat: 1, clearcoatRoughness: 0.03, ior: 1.5, specularIntensity: 1, depthWrite: false, side: THREE.DoubleSide,
   });
+  const rubberCables = [0x1f2937, 0x7c2d12, 0x1e3a8a, 0x374151].map((c) => pbrSet('rubber', { color: c, normal: 1.4 }));
   const hubBag = pbrSet('fabric-weave', { color: 0xe3dcc6, normal: 1.1 });
   const hubBagAlt = pbrSet('fabric-weave', { color: 0x9db4c9, normal: 1.1 });
   const hubLamp = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xffffff, emissiveMap: lightDiffuser(), emissiveIntensity: 0.9 });
@@ -188,10 +190,17 @@ export function buildStation(): Station {
     return door;
   };
 
+  const rackGeos = new Map<string, THREE.PlaneGeometry>();
+  const rackGeo = (w: number, h: number) => { const k = `${w.toFixed(3)}x${h.toFixed(3)}`; let g = rackGeos.get(k); if (!g) rackGeos.set(k, g = new THREE.PlaneGeometry(w, h)); return g; };
+  const rackMats = new Map<number, THREE.Material>();
+  const rackMat = (k: number) => { let m = rackMats.get(k); if (!m) { const t = rackModule(k); rackMats.set(k, m = new THREE.MeshPhysicalMaterial({ map: t.map, normalMap: t.normalMap, normalScale: new THREE.Vector2(1, 1), roughness: 0.52, metalness: 0.12, clearcoat: 0.12, clearcoatRoughness: 0.5 })); } return m; };
+
   const RACKS: RackKind[] = ['lockers', 'equipment', 'bags', 'science', 'lockers', 'grille', 'bags', 'equipment'];
 
   /** A rack-lined module along x, square section of half-size `s`. */
-  const moduleX = (zone: string, x0: number, x1: number, s: number, opts: { racks?: boolean; rails?: boolean; seed?: number } = {}) => {
+  const moduleX = (zone: string, x0: number, x1: number, s: number, opts: { racks?: boolean; rails?: boolean; seed?: number; pbr?: boolean; clear?: [number, number] } = {}) => {
+    const P = !!opts.pbr;
+    const wm = P ? hubWall : wallMat;
     space.add(box(zone, zone, [x0, -s, -s], [x1, s, s]));
     const len = x1 - x0, cx = (x0 + x1) / 2;
     const walls: [THREE.Vector3, THREE.Vector3, THREE.Vector3][] = [
@@ -202,13 +211,34 @@ export function buildStation(): Station {
       [V(cx, 0, s), V(0, 0, -1), V(-1, 0, 0)],
     ];
     walls.forEach(([c, n, uAxis], wi) => {
-      face(c, n, uAxis, len, s * 2);
+      face(c, n, uAxis, len, s * 2, undefined, wm);
       if (opts.racks === false) return;
       // Racks: about a metre each, inset slightly, faces of varied kinds.
       const count = Math.max(1, Math.floor(len / 1.05));
       for (let i = 0; i < count; i++) {
         const kind = RACKS[(i + wi * 3 + (opts.seed ?? 0)) % RACKS.length];
         const rx = x0 + (i + 0.5) * (len / count);
+        if (P) {
+          // Racks as five stacked 1 × 0.55 m modules, each a 1024 px/m painted-aluminium face, between anodised rails.
+          if (wi === 2 && opts.clear && rx > opts.clear[0] && rx < opts.clear[1]) continue;
+          const rw = len / count - 0.08, rh = s * 2 - 0.25, mh = rh / 5;
+          const vv = new THREE.Vector3().crossVectors(n, uAxis).normalize();
+          const q4 = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(uAxis, vv, n));
+          for (let j = 0; j < 5; j++) {
+            const mk = (i * 3 + wi * 5 + j * 2 + (opts.seed ?? 0)) % RACK_MODULES;
+            const m = new THREE.Mesh(rackGeo(rw, mh), rackMat(mk));
+            m.quaternion.copy(q4);
+            m.position.copy(c).setX(rx).addScaledVector(vv, -rh / 2 + mh * (j + 0.5)).addScaledVector(n, 0.04);
+            add(m);
+          }
+          for (const sx of [-1, 1]) {
+            const rail = boxPBR(0.04, rh, 0.06, hubFrame);
+            rail.position.copy(c).setX(rx).addScaledVector(uAxis, sx * (rw / 2 + 0.02)).addScaledVector(n, 0.05);
+            add(rail);
+          }
+          if (i % 2 === 0) wallSpots.push({ zone, pos: c.clone().setX(rx).addScaledVector(n, 0.1), normal: n.clone() });
+          continue;
+        }
         const r = plane(len / count - 0.08, s * 2 - 0.25, new THREE.MeshStandardMaterial({ map: rackTexture(kind, i + wi * 7 + (opts.seed ?? 0)), roughness: 0.6, metalness: 0.1 }));
         const v = new THREE.Vector3().crossVectors(n, uAxis).normalize();
         r.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(uAxis, v, n));
@@ -219,7 +249,7 @@ export function buildStation(): Station {
     });
     // Ceiling light strips along the two upper edges, with a purple accent line.
     for (const z of [-s + 0.18, s - 0.18]) {
-      const l = new THREE.Mesh(new THREE.BoxGeometry(len - 0.6, 0.04, 0.12), lightMat);
+      const l = new THREE.Mesh(new THREE.BoxGeometry(len - 0.6, 0.04, 0.12), P ? hubLamp : lightMat);
       l.position.set(cx, s - 0.06, z);
       add(l);
       const a = new THREE.Mesh(new THREE.BoxGeometry(len - 0.6, 0.012, 0.02), accentMat);
@@ -231,12 +261,13 @@ export function buildStation(): Station {
       for (const [y, z] of [[0.55 * s, -s + 0.1], [-0.55 * s, s - 0.1]]) {
         const a = V(x0 + 0.5, y, z), b = V(x1 - 0.5, y, z);
         rails.push({ a, b });
-        const rod = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.022, len - 1, 10), railMat);
+        const rod = new THREE.Mesh(P ? scaleUV(new THREE.CylinderGeometry(0.022, 0.022, len - 1, 24), 1, (len - 1) * 3) : new THREE.CylinderGeometry(0.022, 0.022, len - 1, 10), P ? hubRail : railMat);
         rod.rotation.z = Math.PI / 2;
         rod.position.set(cx, y, z);
         add(rod);
+        if (P) { const gp = new THREE.Mesh(scaleUV(new THREE.CylinderGeometry(0.026, 0.026, (len - 1) * 0.3, 24), 2, 1), hubGrip); gp.rotation.z = Math.PI / 2; gp.position.set(cx, y, z); add(gp); }
         for (let x = x0 + 0.5; x <= x1 - 0.5 + 1e-6; x += (len - 1) / Math.max(1, Math.round((len - 1) / 1.6))) {
-          const st = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, 0.1, 8), railMat);
+          const st = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, 0.1, P ? 16 : 8), P ? hubFrame : railMat);
           st.position.set(x, y, z + (z < 0 ? -0.05 : 0.05));
           st.rotation.x = Math.PI / 2;
           add(st);
@@ -247,7 +278,7 @@ export function buildStation(): Station {
       for (let j = 0; j < 3; j++) {
         const pts = [];
         for (let i = 0; i <= 12; i++) pts.push(V(x0 + 0.3 + (len - 0.6) * (i / 12), y + Math.sin(i * 1.3 + j) * 0.015 + (k ? -j * 0.03 : j * 0.03), z + Math.cos(i * 0.9 + j) * 0.015));
-        add(new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 40, 0.012, 6, false), cableMats[(j + k) % cableMats.length]));
+        add(new THREE.Mesh(P ? scaleUV(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 60, 0.012, 10, false), 14, 1) : new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 40, 0.012, 6, false), P ? rubberCables[(j + k) % rubberCables.length] : cableMats[(j + k) % cableMats.length]));
       }
     }
     // Velcro patches: crews stick things to walls with them.
@@ -263,7 +294,7 @@ export function buildStation(): Station {
       velcro.setMatrixAt(i, m4.compose(pos, q, V(1, 1, 1)));
     }
     add(velcro);
-    const light = new THREE.PointLight(0xfff1e0, 3.2, s * 8, 2);
+    const light = new THREE.PointLight(0xfff1e0, P ? 2.4 : 3.2, s * 8, 2);
     light.position.set(cx, s * 0.6, 0);
     add(light);
   };
@@ -485,9 +516,10 @@ export function buildStation(): Station {
   // Research module (east).
   door('Research module', 'x', 2.2, 3.0, 0.95);
   hatch(V(H + 0.0, 0, 0), V(-1, 0, 0), 0.95, true, -1, hubFrame); // swings north, clear of the hangar gallery
-  moduleX('Research module', 2.8, 11.2, 1.5, { seed: 1 });
-  face(V(2.8, 0, 0), V(1, 0, 0), V(0, 0, -1), 3, 3, 0.95);
-  face(V(11.2, 0, 0), V(-1, 0, 0), V(0, 0, 1), 3, 3, 0.95);
+  moduleX('Research module', 2.8, 11.2, 1.5, { seed: 1, pbr: true, clear: [7.4, 9.0] });
+  face(V(2.8, 0, 0), V(1, 0, 0), V(0, 0, -1), 3, 3, 0.95, hubWall);
+  face(V(11.2, 0, 0), V(-1, 0, 0), V(0, 0, 1), 3, 3, 0.95, hubWall);
+  add(buildWorkstation(V(8.2, -0.25, -1.5)));
 
   // Observation module (east of research): bigger, with a great round window.
   door('Observation module', 'x', 11.0, 11.8, 0.95);
