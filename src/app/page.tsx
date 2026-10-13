@@ -5,8 +5,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Galaxy } from '@/lib/galaxy';
 import type { TokenProfile, WalletProfile } from '@/lib/profile';
 import type { ClusterReport } from '@/lib/clusters';
+import type { Timeline, TradeEvent } from '@/lib/timeline';
+import { money } from '@/components/Dossier';
 import { PlanetView, StarView } from '@/components/Dossier';
-import { KIND, type FlightHud, type Focus, type GalaxyHandle, type Tie } from '@/components/GalaxyScene';
+import { KIND, type FlightHud, type Focus, type GalaxyHandle, type ReplayState, type Tie } from '@/components/GalaxyScene';
 
 const GalaxyScene = dynamic(() => import('@/components/GalaxyScene'), { ssr: false });
 
@@ -22,6 +24,12 @@ export default function Page() {
   const [hud, setHud] = useState<FlightHud | null>(null);
   const [report, setReport] = useState<ClusterReport | null>(null);
   const [radarOpen, setRadarOpen] = useState(true);
+  const [timeline, setTimeline] = useState<Timeline | null>(null);
+  const [rep, setRep] = useState<ReplayState>({ t: 0, playing: false });
+  const [speed, setSpeed] = useState(360_000);
+  const [feed, setFeed] = useState<(TradeEvent & { id: number; n: number })[]>([]);
+  const [block, setBlock] = useState<number | null>(null);
+  const feedId = useRef(0);
   const scene = useRef<GalaxyHandle>(null);
   // Deep dossiers, keyed by address. undefined = loading, null = failed.
   const [wallets, setWallets] = useState<Record<string, WalletProfile | null | undefined>>({});
@@ -35,6 +43,7 @@ export default function Page() {
       setTimeout(() => setIntroDone(true), 3800);
       // Tracing first funders is slower than the galaxy, so it follows it.
       fetch('/api/clusters').then((r) => r.ok ? r.json() : null).then((c) => c && setReport(c)).catch(() => {});
+      fetch('/api/timeline').then((r) => r.ok ? r.json() : null).then((t) => t && setTimeline(t)).catch(() => {});
     }).catch((e) => setError(e.message));
   }, []);
 
@@ -52,6 +61,34 @@ export default function Page() {
     else setHud(null);
   }, []);
 
+  // The heartbeat: poll the chain head; the scene interpolates between polls.
+  useEffect(() => {
+    let dead = false;
+    const tick = () => fetch('/api/block').then((r) => r.ok ? r.json() : null).then((j) => {
+      if (dead || !j?.block) return;
+      setBlock(j.block);
+      scene.current?.block(j.block, j.at);
+    }).catch(() => {});
+    tick();
+    const id = setInterval(tick, 3000);
+    return () => { dead = true; clearInterval(id); };
+  }, [galaxy]);
+
+  const play = useCallback((on: boolean) => {
+    if (!timeline) return;
+    // Pressing play at the end starts the day over.
+    if (on && rep.t >= timeline.end - timeline.start - 1) scene.current?.replay({ seek: 0 });
+    scene.current?.replay({ playing: on });
+  }, [timeline, rep.t]);
+  const onTrade = useCallback((e: TradeEvent) => {
+    // A wallet hammering one token reads as one line, not six.
+    setFeed((f) => {
+      const top = f[0];
+      if (top && top.name === e.name && top.p === e.p && top.s === e.s) return [{ ...top, usd: top.usd + e.usd, n: top.n + 1, t: e.t }, ...f.slice(1)];
+      return [{ ...e, id: feedId.current++, n: 1 }, ...f].slice(0, 6);
+    });
+  }, []);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.target as HTMLElement)?.tagName === 'INPUT') return;
@@ -59,10 +96,11 @@ export default function Page() {
       else if (e.code === 'KeyF' && galaxy && introDone) toggleFlight(!flying);
       else if (e.code === 'KeyR' && flying) scene.current?.scan();
       else if (e.code === 'KeyH' && !flying && galaxy) home();
+      else if (e.code === 'KeyP' && timeline) play(!rep.playing);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [select, home, toggleFlight, flying, selected, galaxy, introDone]);
+  }, [select, home, toggleFlight, flying, selected, galaxy, introDone, timeline, play, rep.playing]);
 
   const results = useMemo(() => {
     if (!galaxy || query.trim().length < 2) return [];
@@ -119,7 +157,8 @@ export default function Page() {
 
   return (
     <main>
-      {galaxy && <GalaxyScene ref={scene} galaxy={galaxy} focus={selected ?? hover} onHover={setHover} onSelect={select} onFlight={setHud} ties={ties} clusters={report?.clusters} />}
+      {galaxy && <GalaxyScene ref={scene} galaxy={galaxy} focus={selected ?? hover} onHover={setHover} onSelect={select} onFlight={setHud} ties={ties} clusters={report?.clusters}
+        timeline={timeline} onReplay={setRep} onTrade={onTrade} />}
 
       <header className={`title ${introDone ? 'small' : ''}`}>
         <h1>MONAD<span>CONSTELLATION</span></h1>
@@ -240,6 +279,26 @@ export default function Page() {
             </div>
           )}
 
+          {timeline && !flying && (
+            <TimelineBar tl={timeline} rep={rep} speed={speed} block={block}
+              onPlay={play}
+              onSeek={(t) => scene.current?.replay({ seek: t })}
+              onSpeed={(v) => { setSpeed(v); scene.current?.replay({ speed: v }); }} />
+          )}
+          {timeline && rep.playing && !shown && feed.length > 0 && (
+            <ol className="feed" aria-live="polite">
+              {feed.map((f) => (
+                <li key={f.id}>
+                  <i style={{ background: KIND[f.kind].color }} />
+                  <span className="who">{f.name}</span>
+                  <span className={f.s > 0 ? 'up' : 'down'}>{f.s > 0 ? 'bought' : 'sold'} {money(f.usd)}{f.n > 1 ? ` ×${f.n}` : ''}</span>
+                  <b>${galaxy.planets[f.p].symbol}</b>
+                  <em>{new Date(timeline.start + f.t).toISOString().slice(11, 16)}</em>
+                </li>
+              ))}
+            </ol>
+          )}
+
           <footer className="sources">
             {galaxy.planets.length} planets · {galaxy.stars.length.toLocaleString()} stars · {galaxy.trails.length.toLocaleString()} transfers in flight ·
             {' '}{Object.keys(galaxy.endpoints).length} Nansen endpoints, {Object.values(galaxy.endpoints).reduce((a, b) => a + b, 0)} calls
@@ -247,5 +306,50 @@ export default function Page() {
         </>
       )}
     </main>
+  );
+}
+
+const SPEEDS: [string, number][] = [['1h / 5s', 720_000], ['1h / 10s', 360_000], ['1h / 30s', 120_000], ['1h / min', 60_000]];
+
+function TimelineBar({ tl, rep, speed, block, onPlay, onSeek, onSpeed }: {
+  tl: Timeline; rep: ReplayState; speed: number; block: number | null;
+  onPlay: (on: boolean) => void; onSeek: (t: number) => void; onSpeed: (v: number) => void;
+}) {
+  const span = tl.end - tl.start;
+  const max = Math.max(1, ...tl.hours.map((h) => h.buyUsd + h.sellUsd));
+  const now = new Date(tl.start + rep.t);
+  const seekAt = (e: React.MouseEvent<HTMLDivElement>) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    onSeek(((e.clientX - r.left) / r.width) * span);
+  };
+  return (
+    <section className="timeline" aria-label="24-hour replay">
+      <button className="playbtn" onClick={() => onPlay(!rep.playing)} aria-label={rep.playing ? 'Pause replay' : 'Play the last 24 hours'}>
+        {rep.playing ? '❚❚' : '▶'}
+      </button>
+      <div className="tl-main">
+        <div className="tl-head">
+          <b>{rep.t > 0 || rep.playing ? now.toISOString().slice(5, 16).replace('T', ' · ') + ' UTC' : 'Replay the last 24 hours'}</b>
+          <span>{tl.events.length.toLocaleString()} trades · {tl.transfers.length} transfers · Nansen tgm/dex-trades</span>
+        </div>
+        <div className="bars" onClick={seekAt} role="slider" aria-label="Replay position" aria-valuemin={0} aria-valuemax={24} aria-valuenow={Math.round(rep.t / 3_600_000)}>
+          {tl.hours.map((h, i) => (
+            <span key={i} title={`${new Date(tl.start + i * 3_600_000).toISOString().slice(11, 16)} UTC · ${h.trades} trades · ${money(h.buyUsd)} in / ${money(h.sellUsd)} out`}>
+              <i className="buy" style={{ height: `${(h.buyUsd / max) * 100}%` }} />
+              <i className="sell" style={{ height: `${(h.sellUsd / max) * 100}%` }} />
+            </span>
+          ))}
+          <em className="playhead" style={{ left: `${(rep.t / span) * 100}%` }} />
+        </div>
+      </div>
+      <select value={speed} onChange={(e) => onSpeed(Number(e.target.value))} aria-label="Replay speed">
+        {SPEEDS.map(([l, v]) => <option key={v} value={v}>{l}</option>)}
+      </select>
+      <div className="heartbeat" title="Live: the latest Monad block, one pulse ring per block">
+        <i />
+        <span>Monad live</span>
+        <b>{block ? `#${block.toLocaleString()}` : '…'}</b>
+      </div>
+    </section>
   );
 }

@@ -11,6 +11,7 @@ import { CSS2DObject, CSS2DRenderer } from 'three/examples/jsm/renderers/CSS2DRe
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import type { Galaxy, StarKind } from '@/lib/galaxy';
 import type { Cluster } from '@/lib/clusters';
+import type { Timeline, TradeEvent } from '@/lib/timeline';
 import { worldStyle, type WorldStyle } from '@/lib/worldStyle';
 import { moonsOf } from '@/lib/moons';
 import { buildShuttle } from './shuttle';
@@ -53,7 +54,15 @@ export interface FlightHud {
   world: ExpeditionHud | null;
 }
 
-export interface GalaxyHandle { flyTo(f: Focus): void; setFlying(on: boolean): void; scan(): void }
+export interface ReplayState { t: number; playing: boolean }
+
+export interface GalaxyHandle {
+  flyTo(f: Focus): void; setFlying(on: boolean): void; scan(): void;
+  /** Replay controls: play or pause, seek (ms after the timeline start), speed (timeline ms per real second). */
+  replay(cmd: { playing?: boolean; seek?: number; speed?: number }): void;
+  /** The latest block from the chain, for the heartbeat. */
+  block(n: number, at: number): void;
+}
 
 interface Props {
   galaxy: Galaxy;
@@ -62,6 +71,10 @@ interface Props {
   ties?: Tie[];
   /** Insider clusters: drawn as red tethers from the shared funder. */
   clusters?: Cluster[];
+  timeline?: Timeline | null;
+  onReplay?: (r: ReplayState) => void;
+  /** Notable trades as the replay passes them. */
+  onTrade?: (e: TradeEvent) => void;
   onHover: (f: Focus) => void;
   onSelect: (f: Focus) => void;
   onFlight?: (h: FlightHud | null) => void;
@@ -134,25 +147,32 @@ function orbitPos(o: Orbit, t: number, out: THREE.Vector3) {
   return out.set(o.center.x + x, o.center.y + y, o.center.z + z);
 }
 
-const GalaxyScene = forwardRef<GalaxyHandle, Props>(function GalaxyScene({ galaxy, focus, ties, clusters, onHover, onSelect, onFlight }, ref) {
+const GalaxyScene = forwardRef<GalaxyHandle, Props>(function GalaxyScene({ galaxy, focus, ties, clusters, timeline, onReplay, onTrade, onHover, onSelect, onFlight }, ref) {
   const mount = useRef<HTMLDivElement>(null);
-  const cb = useRef({ onHover, onSelect, onFlight });
-  cb.current = { onHover, onSelect, onFlight };
-  const api = useRef<{ flyTo(f: Focus): void; setFocus(f: Focus): void; setTies(t: Tie[]): void; setClusters(c: Cluster[]): void; setFlying(on: boolean): void; scan(): void }>({
-    flyTo: () => {}, setFocus: () => {}, setTies: () => {}, setClusters: () => {}, setFlying: () => {}, scan: () => {},
+  const cb = useRef({ onHover, onSelect, onFlight, onReplay, onTrade });
+  cb.current = { onHover, onSelect, onFlight, onReplay, onTrade };
+  const api = useRef<{
+    flyTo(f: Focus): void; setFocus(f: Focus): void; setTies(t: Tie[]): void; setClusters(c: Cluster[]): void;
+    setTimeline(t: Timeline | null): void; replay(cmd: { playing?: boolean; seek?: number; speed?: number }): void; block(n: number, at: number): void;
+    setFlying(on: boolean): void; scan(): void;
+  }>({
+    flyTo: () => {}, setFocus: () => {}, setTies: () => {}, setClusters: () => {}, setTimeline: () => {}, replay: () => {}, block: () => {}, setFlying: () => {}, scan: () => {},
   });
   useImperativeHandle(ref, () => ({
     flyTo: (f) => api.current.flyTo(f),
     setFlying: (on) => api.current.setFlying(on),
     scan: () => api.current.scan(),
+    replay: (cmd) => api.current.replay(cmd),
+    block: (n, at) => api.current.block(n, at),
   }));
 
   // Props can arrive before the scene exists; the scene reads these once it does.
-  const latest = useRef({ focus, ties, clusters });
-  latest.current = { focus, ties, clusters };
+  const latest = useRef({ focus, ties, clusters, timeline });
+  latest.current = { focus, ties, clusters, timeline };
   useEffect(() => { api.current.setFocus(focus); }, [focus]);
   useEffect(() => { api.current.setTies(ties ?? []); }, [ties]);
   useEffect(() => { api.current.setClusters(clusters ?? []); }, [clusters]);
+  useEffect(() => { api.current.setTimeline(timeline ?? null); }, [timeline]);
 
   useEffect(() => {
     const el = mount.current!;
@@ -185,7 +205,7 @@ const GalaxyScene = forwardRef<GalaxyHandle, Props>(function GalaxyScene({ galax
 
     const composer = new EffectComposer(renderer);
     composer.addPass(new RenderPass(scene, camera));
-    const bloom = new UnrealBloomPass(new THREE.Vector2(W(), H()), 0.7, 0.45, 0.32);
+    const bloom = new UnrealBloomPass(new THREE.Vector2(W(), H()), 0.7, 0.45, 0.62);
     composer.addPass(bloom);
     composer.addPass(new OutputPass());
 
@@ -466,6 +486,71 @@ const GalaxyScene = forwardRef<GalaxyHandle, Props>(function GalaxyScene({ galax
         scene.add(label);
         return { c, virtual, halo, label, color };
       });
+    };
+
+    // --- replay: the last day, re-run. Trades are beams of money between a
+    // trader's star and its world (green in, red out); transfers fire as
+    // comets at their real time.
+    const replay = { tl: null as Timeline | null, t: 0, playing: false, speed: 360_000, ev: 0, tr: 0, lastEmit: 0 };
+    const BMAX = 260;
+    const beamPos = new Float32Array(BMAX * 6), beamCol = new Float32Array(BMAX * 6);
+    const beamGeo = new THREE.BufferGeometry();
+    beamGeo.setAttribute('position', new THREE.BufferAttribute(beamPos, 3));
+    beamGeo.setAttribute('color', new THREE.BufferAttribute(beamCol, 3));
+    const beamLines = new THREE.LineSegments(beamGeo, new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
+    beamLines.frustumCulled = false;
+    beamLines.renderOrder = 15;
+    scene.add(beamLines);
+    const bheadPos = new Float32Array(BMAX * 3), bheadCol = new Float32Array(BMAX * 3);
+    const bheadGeo = new THREE.BufferGeometry();
+    bheadGeo.setAttribute('position', new THREE.BufferAttribute(bheadPos, 3));
+    bheadGeo.setAttribute('color', new THREE.BufferAttribute(bheadCol, 3));
+    const bheads = new THREE.Points(bheadGeo, new THREE.PointsMaterial({ size: 1.2 * S, map: soft, vertexColors: true, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
+    bheads.frustumCulled = false;
+    bheads.renderOrder = 15;
+    scene.add(bheads);
+    interface Beam { e: TradeEvent; t0: number; dur: number; from: THREE.Vector3; to: THREE.Vector3; seed: number }
+    let beams: Beam[] = [];
+    const activity = new Float32Array(galaxy.planets.length);
+    const lowerBound = <T,>(arr: T[], t: number, key: (x: T) => number) => {
+      let lo = 0, hi = arr.length;
+      while (lo < hi) { const mid = (lo + hi) >> 1; if (key(arr[mid]) < t) lo = mid + 1; else hi = mid; }
+      return lo;
+    };
+    api.current.setTimeline = (tl) => {
+      replay.tl = tl;
+      replay.t = 0; replay.ev = 0; replay.tr = 0;
+      beams = [];
+    };
+    api.current.replay = (cmd) => {
+      if (cmd.speed != null) replay.speed = cmd.speed;
+      if (cmd.seek != null && replay.tl) {
+        replay.t = Math.max(0, Math.min(replay.tl.end - replay.tl.start, cmd.seek));
+        replay.ev = lowerBound(replay.tl.events, replay.t, (e) => e.t);
+        replay.tr = lowerBound(replay.tl.transfers, replay.t, (x) => x.t);
+        beams = [];
+      }
+      if (cmd.playing != null) replay.playing = cmd.playing && !!replay.tl;
+      cb.current.onReplay?.({ t: replay.t, playing: replay.playing });
+    };
+
+    // --- heartbeat: a faint ring leaves the sun with every Monad block.
+    const RINGS = 18;
+    const ringMat = (() => new THREE.MeshBasicMaterial({ color: 0xb8a6ff, transparent: true, opacity: 0, side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending }));
+    const rings = Array.from({ length: RINGS }, () => {
+      const m = new THREE.Mesh(new THREE.RingGeometry(0.985, 1, 128), ringMat());
+      m.rotation.x = -Math.PI / 2;
+      m.visible = false;
+      m.renderOrder = 14;
+      scene.add(m);
+      return { m, t0: -99 };
+    });
+    let ringNext = 0;
+    const chain = { block: 0, at: 0, shown: 0, interval: 400 };
+    api.current.block = (n, at) => {
+      if (chain.block && n > chain.block) chain.interval = THREE.MathUtils.clamp((at - chain.at) / (n - chain.block), 200, 2000);
+      if (!chain.shown) chain.shown = n;
+      chain.block = n; chain.at = at;
     };
 
     // --- selection marker and fly-to.
@@ -885,6 +970,7 @@ const GalaxyScene = forwardRef<GalaxyHandle, Props>(function GalaxyScene({ galax
     api.current.setFocus(latest.current.focus);
     api.current.setTies(latest.current.ties ?? []);
     api.current.setClusters(latest.current.clusters ?? []);
+    api.current.setTimeline(latest.current.timeline ?? null);
 
     // The first view: arrive from deep space.
     const introFrom = new THREE.Vector3(0, 260 * S, 420 * S), introTo = camera.position.clone();
@@ -936,7 +1022,7 @@ const GalaxyScene = forwardRef<GalaxyHandle, Props>(function GalaxyScene({ galax
         w.atmoMat.side = d < w.atmoRadius * 0.999 ? THREE.BackSide : THREE.FrontSide;
         planetLabels[i].visible = d > planetR[i] * 3.2 && !occluded(planetLabels[i].position, i);
         if (d < w.atmoRadius) inside = Math.max(inside, 1 - (d - planetR[i]) / (w.atmoRadius - planetR[i]));
-        w.surfaceMat.uniforms.uPulse.value = focusNow?.type === 'planet' && focusNow.index === i ? 0.8 : 0;
+        w.surfaceMat.uniforms.uPulse.value = Math.max(focusNow?.type === 'planet' && focusNow.index === i ? 0.8 : 0, activity[i]);
       }
       for (const m of moons) {
         const d = camera.position.distanceTo(planetPos[m.planet]);
@@ -973,6 +1059,75 @@ const GalaxyScene = forwardRef<GalaxyHandle, Props>(function GalaxyScene({ galax
         tieGeo.attributes.color.needsUpdate = true;
       }
 
+      // Heartbeat: estimate the head block between polls and pulse per block.
+      if (chain.block) {
+        const est = chain.block + Math.floor((Date.now() - chain.at) / chain.interval);
+        if (est > chain.shown) {
+          // Never more than a few rings per frame, even after a hidden tab wakes.
+          for (let n = Math.max(chain.shown + 1, est - 2); n <= est; n++) { rings[ringNext++ % RINGS].t0 = time; }
+          chain.shown = est;
+        }
+      }
+      for (const r of rings) {
+        const age = time - r.t0;
+        if (age < 0 || age > 4) { r.m.visible = false; continue; }
+        r.m.visible = true;
+        const k = age / 4;
+        r.m.scale.setScalar(SUN_R * 1.2 + k * 110 * S);
+        (r.m.material as THREE.MeshBasicMaterial).opacity = 0.07 * (1 - k) * (1 - k);
+      }
+
+      // Replay: advance the clock, launch what it passed.
+      if (replay.tl) {
+        const tl = replay.tl;
+        if (replay.playing) {
+          replay.t += dt * replay.speed;
+          if (replay.t >= tl.end - tl.start) { replay.t = tl.end - tl.start; replay.playing = false; }
+          let launched = 0;
+          while (replay.ev < tl.events.length && tl.events[replay.ev].t <= replay.t) {
+            const e = tl.events[replay.ev++];
+            if (launched++ > 40) continue; // a burst: keep the frame alive, skip the tail
+            const R = planetR[e.p];
+            const rnd = Math.random();
+            const from = e.star != null ? starPos(e.star, new THREE.Vector3())
+              : planetPos[e.p].clone().add(new THREE.Vector3(Math.cos(rnd * 6.28), (Math.random() - 0.5) * 0.8, Math.sin(rnd * 6.28)).normalize().multiplyScalar(R * 3.2));
+            const surf = planetPos[e.p].clone().add(from.clone().sub(planetPos[e.p]).normalize().multiplyScalar(R * 1.02));
+            if (beams.length >= BMAX) beams.shift();
+            beams.push({ e, t0: time, dur: 1.1, from: e.s > 0 ? from : surf, to: e.s > 0 ? surf : from, seed: rnd });
+            if ((e.kind !== 'anon' && e.kind !== 'contract') || e.usd >= 1000) cb.current.onTrade?.(e);
+          }
+          while (replay.tr < tl.transfers.length && tl.transfers[replay.tr].t <= replay.t) {
+            const x = tl.transfers[replay.tr++];
+            const slot = comets.find((cm) => time - cm.t0 > cm.dur);
+            const ti = trails.indexOf(galaxy.trails[x.i]);
+            if (slot && ti >= 0) { slot.trail = ti; slot.t0 = time; slot.dur = 2.2; }
+          }
+        }
+        if (time - replay.lastEmit > 0.1) { replay.lastEmit = time; cb.current.onReplay?.({ t: replay.t, playing: replay.playing }); }
+      }
+      let bn = 0;
+      beams = beams.filter((b) => time - b.t0 < b.dur);
+      for (const b of beams) {
+        const k = (time - b.t0) / b.dur;
+        const head = Math.min(1, k * 1.25), tail = Math.max(0, k * 1.25 - 0.35);
+        vh.lerpVectors(b.from, b.to, head);
+        vt.lerpVectors(b.from, b.to, tail);
+        const w = Math.min(1, 0.35 + Math.log10(1 + b.e.usd) / 4.5) * (1 - Math.max(0, k - 0.8) * 5);
+        const col = b.e.s > 0 ? [0.29, 0.87, 0.5] : [0.97, 0.44, 0.44];
+        beamPos.set([vh.x, vh.y, vh.z, vt.x, vt.y, vt.z], bn * 6);
+        // Heads burn past the bloom threshold so money in flight glows.
+        beamCol.set([col[0] * w * 1.4, col[1] * w * 1.4, col[2] * w * 1.4, 0, 0, 0], bn * 6);
+        bheadPos.set([vh.x, vh.y, vh.z], bn * 3);
+        bheadCol.set([col[0] * w * 2.2, col[1] * w * 2.2, col[2] * w * 2.2], bn * 3);
+        if (head >= 1 && k < 0.85) activity[b.e.p] = Math.min(1.6, activity[b.e.p] + 0.02 + Math.log10(1 + b.e.usd) * 0.02);
+        bn++;
+      }
+      beamGeo.setDrawRange(0, bn * 2);
+      bheadGeo.setDrawRange(0, bn);
+      beamGeo.attributes.position.needsUpdate = true; beamGeo.attributes.color.needsUpdate = true;
+      bheadGeo.attributes.position.needsUpdate = true; bheadGeo.attributes.color.needsUpdate = true;
+      for (let i = 0; i < P; i++) activity[i] *= Math.exp(-dt * 1.4);
+
       // Insider clusters.
       {
         let seg = 0, mem = 0;
@@ -1005,9 +1160,11 @@ const GalaxyScene = forwardRef<GalaxyHandle, Props>(function GalaxyScene({ galax
       }
 
       // Comets.
+      const replaying = !!replay.tl && replay.playing;
       comets.forEach((cm, i) => {
         let k = (time - cm.t0) / cm.dur;
-        if (k >= 1 || k < 0 && cm.t0 > time + 5) {
+        if (replaying && k >= 1) k = -1; // in a replay, comets fly only when their transfer happens
+        else if (k >= 1 || k < 0 && cm.t0 > time + 5) {
           cm.trail = nextTrail++ % trails.length; cm.t0 = time + rs() * 1.5; cm.dur = 1.8 + rs() * 1.6; k = -1;
         }
         const tr = trails[cm.trail];

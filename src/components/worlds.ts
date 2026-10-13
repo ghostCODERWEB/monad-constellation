@@ -123,7 +123,7 @@ const SURFACE_FS = /* glsl */ `
     // Sunlight: a soft terminator that goes warm at dawn and dusk.
     float diff = smoothstep(-0.06, 0.55, ndl);
     vec3 sunCol = mix(vec3(1.0, 0.5, 0.25), vec3(1.0, 0.97, 0.92), smoothstep(0.0, 0.3, ndlFlat));
-    vec3 lit = col * (diff * sunCol * 1.2 + 0.025);
+    vec3 lit = col * (diff * sunCol * 0.95 + 0.025);
     lit += spec * sunCol * smoothstep(0.0, 0.2, ndlFlat);
 
     // Night side: settlements light up the land.
@@ -174,7 +174,7 @@ const CLOUD_FS = /* glsl */ `
     vec3 L = normalize(uSunPos - vWorld);
     float ndl = dot(normalize(vN), L);
     float day = smoothstep(-0.1, 0.35, ndl);
-    vec3 col = mix(uDusk * 0.9, uColor, smoothstep(0.0, 0.35, ndl)) * (0.06 + day * 1.05);
+    vec3 col = mix(uDusk * 0.9, uColor, smoothstep(0.0, 0.35, ndl)) * (0.06 + day * 0.88);
     gl_FragColor = vec4(col * a, a * 0.92);
   }`;
 
