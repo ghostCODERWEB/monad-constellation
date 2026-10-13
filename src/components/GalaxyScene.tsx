@@ -10,6 +10,7 @@ import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { CSS2DObject, CSS2DRenderer } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
 import type { Galaxy, StarKind } from '@/lib/galaxy';
 import { buildShuttle } from './shuttle';
+import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 
 export const KIND: Record<StarKind, { color: string; name: string }> = {
   smart: { color: '#f5c542', name: 'Smart trader' },
@@ -458,6 +459,10 @@ const GalaxyScene = forwardRef<GalaxyHandle, Props>(function GalaxyScene({ galax
     window.addEventListener('resize', onResize);
 
     // --- the shuttle -------------------------------------------------------
+    const pmrem = new THREE.PMREMGenerator(renderer);
+    const envTex = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+    scene.environment = envTex;
+    scene.environmentIntensity = 0.22;
     const ship = buildShuttle();
     ship.group.visible = false;
     scene.add(ship.group);
@@ -486,6 +491,18 @@ const GalaxyScene = forwardRef<GalaxyHandle, Props>(function GalaxyScene({ galax
     const exhaust = new THREE.Points(exGeo, new THREE.PointsMaterial({ size: 0.12, map: soft, vertexColors: true, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
     exhaust.frustumCulled = false;
     scene.add(exhaust);
+
+    // Speed streaks: short light lines that rush past the camera at speed.
+    const SN = 220;
+    const streakPos = new Float32Array(SN * 6), streakCol = new Float32Array(SN * 6);
+    const streakOff = Array.from({ length: SN }, () => new THREE.Vector3((Math.random() - 0.5) * 16, (Math.random() - 0.5) * 10, -Math.random() * 40));
+    const streakGeo = new THREE.BufferGeometry();
+    streakGeo.setAttribute('position', new THREE.BufferAttribute(streakPos, 3));
+    streakGeo.setAttribute('color', new THREE.BufferAttribute(streakCol, 3));
+    const streaks = new THREE.LineSegments(streakGeo, new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
+    streaks.frustumCulled = false;
+    streaks.visible = false;
+    scene.add(streaks);
 
     // Scanner: wallet name tags that appear as you pass close by.
     const SCAN_N = 10;
@@ -532,6 +549,7 @@ const GalaxyScene = forwardRef<GalaxyHandle, Props>(function GalaxyScene({ galax
         fly = null; follow = null;
       } else {
         ship.group.visible = false;
+        streaks.visible = false;
         hideScan();
         fwd.set(0, 0, -1).applyQuaternion(ship.group.quaternion);
         controls.target.copy(ship.group.position).addScaledVector(fwd, 6);
@@ -555,8 +573,8 @@ const GalaxyScene = forwardRef<GalaxyHandle, Props>(function GalaxyScene({ galax
         (has('ArrowDown') ? 1 : 0) - (has('ArrowUp') ? 1 : 0),
         (has('KeyA') ? 1 : 0) - (has('KeyD') ? 1 : 0),
         (has('ArrowLeft', 'KeyQ') ? 1 : 0) - (has('ArrowRight', 'KeyE') ? 1 : 0),
-      ).multiply(new THREE.Vector3(1.3, 1.5, 2.2));
-      flight.spin.lerp(want, 1 - Math.exp(-6 * dt));
+      ).multiply(new THREE.Vector3(1.6, 1.8, 2.8));
+      flight.spin.lerp(want, 1 - Math.exp(-7 * dt));
       const q = ship.group.quaternion;
       q.multiply(tq.setFromAxisAngle(axis.set(1, 0, 0), flight.spin.x * dt));
       q.multiply(tq.setFromAxisAngle(axis.set(0, 1, 0), flight.spin.y * dt));
@@ -566,9 +584,12 @@ const GalaxyScene = forwardRef<GalaxyHandle, Props>(function GalaxyScene({ galax
       fwd.set(0, 0, -1).applyQuaternion(q);
       up.set(0, 1, 0).applyQuaternion(q);
       const throttle = (has('KeyW') ? 1 : 0) - (has('KeyS') ? 0.6 : 0);
-      const maxSpeed = flight.boost ? 75 : 24;
-      flight.vel.addScaledVector(fwd, throttle * (flight.boost ? 55 : 20) * dt);
-      flight.vel.multiplyScalar(Math.exp(-(has('Space') ? 3.5 : 0.45) * dt));
+      const maxSpeed = flight.boost ? 150 : 48;
+      flight.vel.addScaledVector(fwd, throttle * (flight.boost ? 140 : 45) * dt);
+      // Steering also bends the velocity toward the nose, so turns carve.
+      const sp = flight.vel.length();
+      if (sp > 0.5 && flight.vel.dot(fwd) > 0) flight.vel.lerp(vb.copy(fwd).multiplyScalar(sp), 1 - Math.exp(-2.5 * dt));
+      flight.vel.multiplyScalar(Math.exp(-(has('Space') ? 3.5 : 0.35) * dt));
       if (flight.vel.length() > maxSpeed) flight.vel.setLength(maxSpeed);
       ship.group.position.addScaledVector(flight.vel, dt);
 
@@ -587,18 +608,50 @@ const GalaxyScene = forwardRef<GalaxyHandle, Props>(function GalaxyScene({ galax
       });
 
       // Chase camera, banking with the ship.
-      const desired = tmp.set(0, 0.62, 2.6).applyQuaternion(q).add(ship.group.position);
-      camera.position.lerp(desired, 1 - Math.exp(-9 * dt));
+      const speedK = Math.min(1, flight.vel.length() / 150);
+      const desired = tmp.set(0, 0.62 + speedK * 0.15, 2.7 + speedK * 1.4).applyQuaternion(q).add(ship.group.position);
+      camera.position.lerp(desired, 1 - Math.exp(-11 * dt));
+      if (flight.boost && throttle > 0 && !reduced) {
+        camera.position.x += (Math.random() - 0.5) * 0.03 * speedK;
+        camera.position.y += (Math.random() - 0.5) * 0.03 * speedK;
+      }
       camera.up.lerp(up, 1 - Math.exp(-6 * dt)).normalize();
       camera.lookAt(vh.copy(ship.group.position).addScaledVector(fwd, 7));
-      const fov = flight.boost && throttle > 0 ? 78 : 58;
+      const fov = 58 + speedK * 32;
       camera.fov += (fov - camera.fov) * (1 - Math.exp(-4 * dt));
       camera.updateProjectionMatrix();
 
+      // Plumes stretch with throttle and flicker; nav lights blink.
+      const burn = Math.max(0.12, throttle) * (flight.boost ? 1 : 0.55);
+      ship.plumes.forEach((pl, j) => {
+        const flick = 0.9 + Math.sin(now * 40 + j * 2) * 0.06 + Math.random() * 0.06;
+        pl.scale.set(1 + burn * 0.4, 1 + burn * 0.4, (0.25 + burn * (flight.boost ? 2.6 : 1.4)) * flick);
+        (pl.material as THREE.MeshBasicMaterial).color.setHSL(0.72 - burn * 0.12, 0.85, 0.5 + burn * 0.3);
+      });
+      for (const b of ship.blinkers) b.mesh.visible = ((now + b.phase) % 1.2) < 0.18;
+
+      // Streaks: anchored to the camera, rushing backwards faster with speed.
+      streaks.visible = speedK > 0.18;
+      if (streaks.visible) {
+        const len = 0.5 + speedK * 6;
+        for (let i = 0; i < SN; i++) {
+          const o = streakOff[i];
+          o.z += flight.vel.length() * dt * 0.9;
+          if (o.z > 4) { o.set((Math.random() - 0.5) * 16, (Math.random() - 0.5) * 10, -40); }
+          va.copy(o).applyQuaternion(camera.quaternion).add(camera.position);
+          vb.set(o.x, o.y, o.z - len).applyQuaternion(camera.quaternion).add(camera.position);
+          streakPos.set([va.x, va.y, va.z, vb.x, vb.y, vb.z], i * 6);
+          const a = (speedK - 0.18) * 1.2;
+          streakCol.set([0.75 * a, 0.7 * a, a, 0, 0, 0], i * 6);
+        }
+        streakGeo.attributes.position.needsUpdate = true;
+        streakGeo.attributes.color.needsUpdate = true;
+      }
+
       // Engines and exhaust.
       const heat = Math.max(0.15, throttle) * (flight.boost ? 1 : 0.6);
-      ship.engineMats.forEach((m) => m.color.setHSL(0.72 - heat * 0.2, 0.9, 0.55 + heat * 0.35));
-      ship.light.intensity = 0.6 + heat * 2.5;
+      ship.engineMats.forEach((m) => m.color.setHSL(0.72 - heat * 0.2, 0.9, 0.6 + heat * 0.35));
+      ship.light.intensity = 0.3 + heat * 1.2;
       const emit = Math.round(heat * (flight.boost ? 9 : 4));
       for (const nz of ship.nozzles) {
         for (let e = 0; e < emit; e++) {
