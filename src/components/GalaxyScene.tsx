@@ -9,6 +9,7 @@ import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPa
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { CSS2DObject, CSS2DRenderer } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
 import type { Galaxy, StarKind } from '@/lib/galaxy';
+import { buildShuttle } from './shuttle';
 
 export const KIND: Record<StarKind, { color: string; name: string }> = {
   smart: { color: '#f5c542', name: 'Smart trader' },
@@ -23,13 +24,21 @@ export const KIND: Record<StarKind, { color: string; name: string }> = {
 
 export type Focus = { type: 'planet'; index: number } | { type: 'star'; index: number } | null;
 
-export interface GalaxyHandle { flyTo(f: Focus): void }
+export interface FlightHud {
+  speed: number;
+  boost: boolean;
+  nearest: { name: string; distance: number } | null;
+  target: { focus: Focus; name: string; kind: string; distance: number } | null;
+}
+
+export interface GalaxyHandle { flyTo(f: Focus): void; setFlying(on: boolean): void; scan(): void }
 
 interface Props {
   galaxy: Galaxy;
   focus: Focus;
   onHover: (f: Focus) => void;
   onSelect: (f: Focus) => void;
+  onFlight?: (h: FlightHud | null) => void;
 }
 
 interface Orbit { center: THREE.Vector3; radius: number; tiltX: number; tiltY: number; phase: number; speed: number }
@@ -125,12 +134,18 @@ function orbitPos(o: Orbit, t: number, out: THREE.Vector3) {
   return out.set(o.center.x + x, o.center.y + y, o.center.z + z);
 }
 
-const GalaxyScene = forwardRef<GalaxyHandle, Props>(function GalaxyScene({ galaxy, focus, onHover, onSelect }, ref) {
+const GalaxyScene = forwardRef<GalaxyHandle, Props>(function GalaxyScene({ galaxy, focus, onHover, onSelect, onFlight }, ref) {
   const mount = useRef<HTMLDivElement>(null);
-  const cb = useRef({ onHover, onSelect });
-  cb.current = { onHover, onSelect };
-  const api = useRef<{ flyTo(f: Focus): void; setFocus(f: Focus): void }>({ flyTo: () => {}, setFocus: () => {} });
-  useImperativeHandle(ref, () => ({ flyTo: (f) => api.current.flyTo(f) }));
+  const cb = useRef({ onHover, onSelect, onFlight });
+  cb.current = { onHover, onSelect, onFlight };
+  const api = useRef<{ flyTo(f: Focus): void; setFocus(f: Focus): void; setFlying(on: boolean): void; scan(): void }>({
+    flyTo: () => {}, setFocus: () => {}, setFlying: () => {}, scan: () => {},
+  });
+  useImperativeHandle(ref, () => ({
+    flyTo: (f) => api.current.flyTo(f),
+    setFlying: (on) => api.current.setFlying(on),
+    scan: () => api.current.scan(),
+  }));
 
   useEffect(() => { api.current.setFocus(focus); }, [focus]);
 
@@ -376,6 +391,7 @@ const GalaxyScene = forwardRef<GalaxyHandle, Props>(function GalaxyScene({ galax
     const positionOf = (f: Focus, out: THREE.Vector3) => f?.type === 'planet' ? out.copy(planetPos[f.index]) : f?.type === 'star' ? orbitPos(orbits[f.index], time, out) : out.set(0, 0, 0);
 
     api.current.flyTo = (f) => {
+      if (flight.on) return; // the pilot is flying the camera
       const to = positionOf(f, new THREE.Vector3());
       const dist = f?.type === 'planet' ? planetR[f.index] * 9 + 14 : f?.type === 'star' ? 9 : 190;
       const dir = camera.position.clone().sub(controls.target).normalize();
@@ -423,6 +439,7 @@ const GalaxyScene = forwardRef<GalaxyHandle, Props>(function GalaxyScene({ galax
       cb.current.onSelect(f);
     };
     const onMove = (e: PointerEvent) => {
+      if (flight.on) return; // steering, not browsing
       const now = performance.now();
       if (now - lastMove < 50) return;
       lastMove = now;
@@ -440,6 +457,218 @@ const GalaxyScene = forwardRef<GalaxyHandle, Props>(function GalaxyScene({ galax
     };
     window.addEventListener('resize', onResize);
 
+    // --- the shuttle -------------------------------------------------------
+    const ship = buildShuttle();
+    ship.group.visible = false;
+    scene.add(ship.group);
+    const flight = {
+      on: false,
+      vel: new THREE.Vector3(),
+      spin: new THREE.Vector3(), // pitch, yaw, roll rates
+      keys: new Set<string>(),
+      drag: null as { x: number; y: number } | null,
+      lastHud: 0,
+      lastScan: 0,
+      target: null as Focus,
+      boost: false,
+    };
+    const fwd = new THREE.Vector3(), up = new THREE.Vector3(), tq = new THREE.Quaternion(), axis = new THREE.Vector3();
+
+    // Exhaust: a pool of glowing particles left behind the engines.
+    const EX = 500;
+    const exPos = new Float32Array(EX * 3).fill(-9999), exCol = new Float32Array(EX * 3);
+    const exVel = Array.from({ length: EX }, () => new THREE.Vector3());
+    const exLife = new Float32Array(EX);
+    let exNext = 0;
+    const exGeo = new THREE.BufferGeometry();
+    exGeo.setAttribute('position', new THREE.BufferAttribute(exPos, 3));
+    exGeo.setAttribute('color', new THREE.BufferAttribute(exCol, 3));
+    const exhaust = new THREE.Points(exGeo, new THREE.PointsMaterial({ size: 0.12, map: soft, vertexColors: true, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
+    exhaust.frustumCulled = false;
+    scene.add(exhaust);
+
+    // Scanner: wallet name tags that appear as you pass close by.
+    const SCAN_N = 10;
+    const scanTags = Array.from({ length: SCAN_N }, () => {
+      const div = document.createElement('div');
+      div.className = 'slabel';
+      const o = new CSS2DObject(div);
+      o.visible = false;
+      scene.add(o);
+      return { o, div, star: -1 };
+    });
+    const hideScan = () => scanTags.forEach((t) => { t.o.visible = false; t.star = -1; });
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (!flight.on || (e.target as HTMLElement)?.tagName === 'INPUT') return;
+      flight.keys.add(e.code);
+      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(e.code)) e.preventDefault();
+    };
+    const onKeyUp = (e: KeyboardEvent) => { flight.keys.delete(e.code); };
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keyup', onKeyUp);
+    const onFlyDrag = (e: PointerEvent) => {
+      if (!flight.on || !(e.buttons & 1)) return;
+      // Drag to steer: the mouse nudges pitch and yaw.
+      flight.spin.y -= e.movementX * 0.012;
+      flight.spin.x -= e.movementY * 0.012;
+    };
+    labels.domElement.addEventListener('pointermove', onFlyDrag);
+
+    api.current.setFlying = (on) => {
+      if (on === flight.on) return;
+      flight.on = on;
+      flight.keys.clear();
+      if (on) {
+        // Launch from just in front of the current view, facing the same way.
+        camera.getWorldDirection(fwd);
+        ship.group.position.copy(camera.position).addScaledVector(fwd, 4);
+        ship.group.quaternion.copy(camera.quaternion);
+        flight.vel.copy(fwd).multiplyScalar(6);
+        flight.spin.set(0, 0, 0);
+        ship.group.visible = true;
+        controls.enabled = false;
+        controls.autoRotate = false;
+        fly = null; follow = null;
+      } else {
+        ship.group.visible = false;
+        hideScan();
+        fwd.set(0, 0, -1).applyQuaternion(ship.group.quaternion);
+        controls.target.copy(ship.group.position).addScaledVector(fwd, 6);
+        camera.up.set(0, 1, 0);
+        camera.fov = 55; camera.updateProjectionMatrix();
+        controls.enabled = true;
+        cb.current.onFlight?.(null);
+      }
+    };
+    api.current.scan = () => { if (flight.on && flight.target) cb.current.onSelect(flight.target); };
+
+    const nameOf = (f: Focus) => f?.type === 'planet' ? `$${galaxy.planets[f.index].symbol}` : f?.type === 'star' ? galaxy.stars[f.index].name : '';
+    const kindOf = (f: Focus) => f?.type === 'planet' ? 'token' : f?.type === 'star' ? KIND[galaxy.stars[f.index].kind].name : '';
+
+    const pilot = (dt: number, now: number) => {
+      const k = flight.keys;
+      const has = (...c: string[]) => c.some((x) => k.has(x));
+      flight.boost = has('ShiftLeft', 'ShiftRight');
+      // Turning: rates ease in and out so the ship feels like it has mass.
+      const want = new THREE.Vector3(
+        (has('ArrowDown') ? 1 : 0) - (has('ArrowUp') ? 1 : 0),
+        (has('KeyA') ? 1 : 0) - (has('KeyD') ? 1 : 0),
+        (has('ArrowLeft', 'KeyQ') ? 1 : 0) - (has('ArrowRight', 'KeyE') ? 1 : 0),
+      ).multiply(new THREE.Vector3(1.3, 1.5, 2.2));
+      flight.spin.lerp(want, 1 - Math.exp(-6 * dt));
+      const q = ship.group.quaternion;
+      q.multiply(tq.setFromAxisAngle(axis.set(1, 0, 0), flight.spin.x * dt));
+      q.multiply(tq.setFromAxisAngle(axis.set(0, 1, 0), flight.spin.y * dt));
+      q.multiply(tq.setFromAxisAngle(axis.set(0, 0, 1), flight.spin.z * dt));
+      q.normalize();
+
+      fwd.set(0, 0, -1).applyQuaternion(q);
+      up.set(0, 1, 0).applyQuaternion(q);
+      const throttle = (has('KeyW') ? 1 : 0) - (has('KeyS') ? 0.6 : 0);
+      const maxSpeed = flight.boost ? 75 : 24;
+      flight.vel.addScaledVector(fwd, throttle * (flight.boost ? 55 : 20) * dt);
+      flight.vel.multiplyScalar(Math.exp(-(has('Space') ? 3.5 : 0.45) * dt));
+      if (flight.vel.length() > maxSpeed) flight.vel.setLength(maxSpeed);
+      ship.group.position.addScaledVector(flight.vel, dt);
+
+      // Planets are solid: slide off the atmosphere instead of passing through.
+      let nearest = -1, nearestD = Infinity;
+      planetPos.forEach((pp, i) => {
+        const d = ship.group.position.distanceTo(pp);
+        if (d - planetR[i] < nearestD) { nearestD = d - planetR[i]; nearest = i; }
+        const min = planetR[i] * 1.18 + 0.4;
+        if (d < min) {
+          const n = tmp.copy(ship.group.position).sub(pp).normalize();
+          ship.group.position.copy(pp).addScaledVector(n, min);
+          const into = flight.vel.dot(n);
+          if (into < 0) flight.vel.addScaledVector(n, -into);
+        }
+      });
+
+      // Chase camera, banking with the ship.
+      const desired = tmp.set(0, 0.62, 2.6).applyQuaternion(q).add(ship.group.position);
+      camera.position.lerp(desired, 1 - Math.exp(-9 * dt));
+      camera.up.lerp(up, 1 - Math.exp(-6 * dt)).normalize();
+      camera.lookAt(vh.copy(ship.group.position).addScaledVector(fwd, 7));
+      const fov = flight.boost && throttle > 0 ? 78 : 58;
+      camera.fov += (fov - camera.fov) * (1 - Math.exp(-4 * dt));
+      camera.updateProjectionMatrix();
+
+      // Engines and exhaust.
+      const heat = Math.max(0.15, throttle) * (flight.boost ? 1 : 0.6);
+      ship.engineMats.forEach((m) => m.color.setHSL(0.72 - heat * 0.2, 0.9, 0.55 + heat * 0.35));
+      ship.light.intensity = 0.6 + heat * 2.5;
+      const emit = Math.round(heat * (flight.boost ? 9 : 4));
+      for (const nz of ship.nozzles) {
+        for (let e = 0; e < emit; e++) {
+          const i = exNext++ % EX;
+          vt.copy(nz).applyQuaternion(q).add(ship.group.position);
+          exPos.set([vt.x, vt.y, vt.z], i * 3);
+          exVel[i].copy(fwd).multiplyScalar(-(3 + Math.random() * 3)).add(flight.vel.clone().multiplyScalar(0.6))
+            .add(va.set(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).multiplyScalar(0.6));
+          exLife[i] = 0.55;
+        }
+      }
+      for (let i = 0; i < EX; i++) {
+        if (exLife[i] <= 0) { exPos[i * 3 + 1] = -9999; continue; }
+        exLife[i] -= dt;
+        exPos[i * 3] += exVel[i].x * dt; exPos[i * 3 + 1] += exVel[i].y * dt; exPos[i * 3 + 2] += exVel[i].z * dt;
+        const l = Math.max(0, exLife[i] / 0.55);
+        exCol.set(flight.boost ? [l, l * 0.85, l * 1.0] : [l * 0.65, l * 0.55, l], i * 3);
+      }
+      exGeo.attributes.position.needsUpdate = true;
+      exGeo.attributes.color.needsUpdate = true;
+
+      // Scanner and target lock, five times a second.
+      if (now - flight.lastScan > 0.2) {
+        flight.lastScan = now;
+        const pos = ship.group.position;
+        const close: { i: number; d: number }[] = [];
+        let best: Focus = null, bestScore = Infinity;
+        for (let i = 0; i < N; i++) {
+          orbitPos(orbits[i], time, va);
+          const d = va.distanceTo(pos);
+          if (d < 16) close.push({ i, d });
+          if (d < 45) {
+            const ang = vb.copy(va).sub(pos).normalize().angleTo(fwd);
+            if (ang < 0.16) { const sc = ang * 30 + d; if (sc < bestScore) { bestScore = sc; best = { type: 'star', index: i }; } }
+          }
+        }
+        planetPos.forEach((pp, i) => {
+          const d = pp.distanceTo(pos) - planetR[i];
+          const ang = vb.copy(pp).sub(pos).normalize().angleTo(fwd);
+          if (d < 120 && ang < 0.22) { const sc = ang * 30 + d * 0.5; if (sc < bestScore) { bestScore = sc; best = { type: 'planet', index: i }; } }
+        });
+        flight.target = best;
+        close.sort((a, b) => a.d - b.d);
+        // Prefer labelled wallets when the neighbourhood is crowded.
+        const shown = close.filter((c) => galaxy.stars[c.i].kind !== 'anon').concat(close.filter((c) => galaxy.stars[c.i].kind === 'anon')).slice(0, SCAN_N);
+        scanTags.forEach((t, j) => {
+          const c = shown[j];
+          if (!c) { t.o.visible = false; t.star = -1; return; }
+          if (t.star !== c.i) {
+            const st = galaxy.stars[c.i];
+            t.star = c.i;
+            t.div.innerHTML = `<i style="background:${KIND[st.kind].color}"></i><b>${st.name.replace(/</g, '&lt;')}</b>${st.pnlUsd ? `<span class="${st.pnlUsd > 0 ? 'up' : 'down'}">${money(st.pnlUsd)}</span>` : st.holdingUsd ? `<span>${money(st.holdingUsd)}</span>` : ''}`;
+          }
+          t.o.visible = true;
+        });
+
+        if (now - flight.lastHud > 0.1) {
+          flight.lastHud = now;
+          const tp = best ? positionOf(best, va) : null;
+          cb.current.onFlight?.({
+            speed: flight.vel.length(),
+            boost: flight.boost,
+            nearest: nearest >= 0 ? { name: `$${galaxy.planets[nearest].symbol}`, distance: Math.max(0, nearestD) } : null,
+            target: best && tp ? { focus: best, name: nameOf(best), kind: kindOf(best), distance: tp.distanceTo(pos) } : null,
+          });
+        }
+      }
+      for (const t of scanTags) if (t.star >= 0) orbitPos(orbits[t.star], time, t.o.position).y += 0.5;
+    };
+
     // The first view: arrive from deep space.
     const intro = { t0: 0, from: new THREE.Vector3(0, 260, 420), to: camera.position.clone() };
     camera.position.copy(intro.from);
@@ -454,10 +683,11 @@ const GalaxyScene = forwardRef<GalaxyHandle, Props>(function GalaxyScene({ galax
       for (const m of planetMats) m.uniforms.uTime.value = time;
       dust.rotation.y += dt * 0.006;
 
-      if (time - intro.t0 < 3.5 && !fly && !reduced) {
+      if (flight.on) pilot(dt, time);
+      if (!flight.on && time - intro.t0 < 3.5 && !fly && !reduced) {
         camera.position.lerpVectors(intro.from, intro.to, ease(Math.min(1, (time - intro.t0) / 3.5)));
       }
-      if (fly) {
+      if (flight.on) { /* the pilot owns the camera */ } else if (fly) {
         const k = ease(Math.min(1, (time - fly.t0) / 1.4));
         if (fly.follow) positionOf(fly.follow, fly.to);
         controls.target.lerpVectors(fly.from, fly.to, k);
@@ -504,7 +734,7 @@ const GalaxyScene = forwardRef<GalaxyHandle, Props>(function GalaxyScene({ galax
       headGeo.attributes.position.needsUpdate = true; headGeo.attributes.color.needsUpdate = true;
       tailGeo.attributes.position.needsUpdate = true; tailGeo.attributes.color.needsUpdate = true;
 
-      controls.update();
+      if (!flight.on) controls.update();
       composer.render();
       labels.render(scene, camera);
     };
@@ -516,6 +746,9 @@ const GalaxyScene = forwardRef<GalaxyHandle, Props>(function GalaxyScene({ galax
       labels.domElement.removeEventListener('pointerdown', onDown);
       labels.domElement.removeEventListener('pointerup', onUp);
       labels.domElement.removeEventListener('pointermove', onMove);
+      labels.domElement.removeEventListener('pointermove', onFlyDrag);
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keyup', onKeyUp);
       controls.dispose();
       composer.dispose();
       renderer.dispose();

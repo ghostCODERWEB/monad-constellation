@@ -3,7 +3,7 @@
 import dynamic from 'next/dynamic';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Galaxy, Planet, Star } from '@/lib/galaxy';
-import { KIND, type Focus, type GalaxyHandle } from '@/components/GalaxyScene';
+import { KIND, type FlightHud, type Focus, type GalaxyHandle } from '@/components/GalaxyScene';
 
 const GalaxyScene = dynamic(() => import('@/components/GalaxyScene'), { ssr: false });
 
@@ -28,6 +28,8 @@ export default function Page() {
   const [selected, setSelected] = useState<Focus>(null);
   const [query, setQuery] = useState('');
   const [introDone, setIntroDone] = useState(false);
+  const [flying, setFlying] = useState(false);
+  const [hud, setHud] = useState<FlightHud | null>(null);
   const scene = useRef<GalaxyHandle>(null);
 
   useEffect(() => {
@@ -44,11 +46,23 @@ export default function Page() {
     scene.current?.flyTo(f);
   }, []);
 
+  const toggleFlight = useCallback((on: boolean) => {
+    setFlying(on);
+    scene.current?.setFlying(on);
+    if (on) setHover(null);
+    else setHud(null);
+  }, []);
+
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') select(null); };
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.target as HTMLElement)?.tagName === 'INPUT') return;
+      if (e.key === 'Escape') { if (selected) select(null); else if (flying) toggleFlight(false); }
+      else if (e.code === 'KeyF' && galaxy && introDone) toggleFlight(!flying);
+      else if (e.code === 'KeyR' && flying) scene.current?.scan();
+    };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [select]);
+  }, [select, toggleFlight, flying, selected, galaxy, introDone]);
 
   const results = useMemo(() => {
     if (!galaxy || query.trim().length < 2) return [];
@@ -68,7 +82,7 @@ export default function Page() {
 
   return (
     <main>
-      {galaxy && <GalaxyScene ref={scene} galaxy={galaxy} focus={selected ?? hover} onHover={setHover} onSelect={select} />}
+      {galaxy && <GalaxyScene ref={scene} galaxy={galaxy} focus={selected ?? hover} onHover={setHover} onSelect={select} onFlight={setHud} />}
 
       <header className={`title ${introDone ? 'small' : ''}`}>
         <h1>MONAD<span>CONSTELLATION</span></h1>
@@ -103,12 +117,48 @@ export default function Page() {
             </aside>
           )}
 
-          <ul className="legend">
+          <ul className={`legend ${flying ? 'hidden' : ''}`}>
             {(Object.keys(KIND) as (keyof typeof KIND)[]).map((k) => (
               <li key={k}><i style={{ background: KIND[k].color, boxShadow: `0 0 10px ${KIND[k].color}` }} />{KIND[k].name}<em>{(counts[k] ?? 0).toLocaleString()}</em></li>
             ))}
             <li className="hint">Brightness = proven profit, Nansen labels and size</li>
           </ul>
+
+          {!flying && (
+            <button className="flybtn" onClick={() => toggleFlight(true)}>
+              <span>Fly the shuttle</span><kbd>F</kbd>
+            </button>
+          )}
+
+          {flying && (
+            <div className="cockpit" aria-live="polite">
+              <div className="reticle"><i /><i /><i /><i /></div>
+              {hud?.target && (
+                <div className="lock">
+                  <span className="eyebrow">Target locked · {hud.target.kind}</span>
+                  <b>{hud.target.name}</b>
+                  <span>{hud.target.distance.toFixed(1)} u · press <kbd>R</kbd> to scan</span>
+                </div>
+              )}
+              <div className="gauges">
+                <div className={`speed ${hud?.boost ? 'boost' : ''}`}>
+                  <b>{Math.round((hud?.speed ?? 0) * 10)}</b><span>{hud?.boost ? 'BOOST' : 'speed'}</span>
+                  <i style={{ width: `${Math.min(100, ((hud?.speed ?? 0) / 75) * 100)}%` }} />
+                </div>
+                {hud?.nearest && <div className="near"><span className="eyebrow">Nearest planet</span><b>{hud.nearest.name}</b><span>{hud.nearest.distance.toFixed(1)} u</span></div>}
+              </div>
+              <ul className="keys">
+                <li><kbd>W</kbd><kbd>S</kbd> thrust</li>
+                <li><kbd>A</kbd><kbd>D</kbd> turn</li>
+                <li><kbd>↑</kbd><kbd>↓</kbd> pitch</li>
+                <li><kbd>←</kbd><kbd>→</kbd> roll</li>
+                <li><kbd>Shift</kbd> boost</li>
+                <li><kbd>Space</kbd> brake</li>
+                <li>drag to steer</li>
+                <li><kbd>Esc</kbd> land</li>
+              </ul>
+            </div>
+          )}
 
           <footer className="sources">
             {galaxy.planets.length} planets · {galaxy.stars.length.toLocaleString()} stars · {galaxy.trails.length.toLocaleString()} transfers in flight ·
