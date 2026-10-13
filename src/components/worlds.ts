@@ -342,14 +342,14 @@ export interface World {
   atmoRadius: number;
 }
 
-export function buildWorld(style: WorldStyle, radius: number, center: THREE.Vector3, sunPos: { value: THREE.Vector3 }, ring: boolean): World {
+export function buildWorld(style: WorldStyle, radius: number, center: THREE.Vector3, sunPos: { value: THREE.Vector3 }, ring: boolean, atmoScale = 1.1): World {
   const pal = style.palette;
   const group = new THREE.Group();
   group.position.copy(center);
   group.rotation.z = style.tilt;
   const spinner = new THREE.Group();
   group.add(spinner);
-  const atmoRadius = radius * 1.1;
+  const atmoRadius = radius * atmoScale;
 
   const surfaceMat = new THREE.ShaderMaterial({
     vertexShader: WORLD_VS, fragmentShader: SURFACE_FS,
