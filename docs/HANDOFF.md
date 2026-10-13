@@ -90,17 +90,53 @@ Read these before changing anything:
 - `window.__station` is the engine in development: `setMode()`, `walker.pos`, `walker.quat`, `subject`.
 - GLSL: `smoothstep` with edge0 > edge1 is undefined (it returns 0 on this GPU). Use the `ss()` helper from `NOISE` in `src/components/worlds.ts`.
 
-## Still to do (from the user's spec, roughly in priority order)
-1. **Rug checker app in the PC:** port the six checks from `~/Desktop/nansen/Peregrine/src/lib/rug.ts` (plus `rug.test.ts`; UI in `Peregrine/src/components/rug/`) to Monad and Nansen, with every check source-tagged.
-2. **Copy-trading lab in the PC:** pick smart wallets from Nansen and replay their trades as **paper trades only**, with simulated PnL and no execution.
-3. **Audio:** implement `engine.sfx` with WebAudio synthesis: ambience, motors, push, grab, discover, ignite, robot voice blips.
-4. **Airlock and EVA:** the doors exist (`station.doors.airlockInner/Outer`); add a spacewalk mode outside the hull.
-5. **Pilotable shuttle with docking** inside the station scene, beyond the current scripted launch and arrival.
-6. **Polish and testing:**
-   - Check the chat and shuttle camera framing on a wide screen.
-   - Mobile layout.
-   - Vitest coverage for the new logic.
-   - A final report listing providers, endpoints, fallbacks, unsupported features and needed configuration.
-7. **Owner-side tasks (user only):** deploy the contracts with their key, set BlockVision/Zerion/Envio keys if wanted, and host it (Vercel/GitHub).
+## Your scope: only these four areas, all with photoreal detail
+The user narrowed the work. Focus **only** on these, and leave everything else alone: airlock, EVA, habitation, the galaxy page, contracts and audio are all out of scope.
 
-Before you start, confirm the dev server runs and `npm run typecheck` passes. Then ask the user which item to take next, unless they've already said.
+1. **Observation room (telescope):** the observation module and the telescope rig and console (`world/station.ts` observation section, `modes/telescope.ts`, `ui/TelescopeHUD.tsx`).
+2. **Research room (PC):** the research module, the workstation desk and monitors (`world/station.ts` research section, `features/pc.ts`, `ui/ResearchPC.tsx`).
+3. **Mission control (AI robot):** the hub and the NANSEN AI robot (`world/station.ts` hub section, `features/robot.ts`, `ui/AgentPanel.tsx`).
+4. **Hangar (shuttle):** the hangar, the glass gallery and walkway, and the shuttle itself (`world/station.ts` tunnel and hangar sections, `features/hangar.ts`, `ui/ShuttlePanel.tsx`; the shuttle mesh is `src/components/shuttle.ts`, which the galaxy also uses, so don't break it there).
+
+### The main goal: super detailed, real-life textures and materials
+Everything in these four areas must look like real ISS hardware photographed in orbit, not like a game blockout. That means:
+
+- **Full PBR on every surface:**
+  - albedo, normal, roughness, metalness, plus AO where it helps
+  - at least 2048px for large surfaces
+  - correct texel density, so nothing looks stretched or blurry up close
+- **Real ISS references for the hardware:**
+  - beta-cloth/Nomex wall panels with quilting and stitching
+  - velcro patches, cargo transfer bags, cable bundles and zip ties
+  - handrails with worn paint, labelled rack fronts with screws and decals
+  - scuffs and fingerprints
+  - real-looking monitors with a bezel, screen glow and reflections
+- **Robot:**
+  - painted metal in Nansen green #00FFA7 / #09C385 with Dark #122927, clearcoat and micro-scratches
+  - a glossy visor with reflections
+  - panel seams, screws and a decal-quality logo (the official mark is in `public/brand/`)
+- **Shuttle:**
+  - spacecraft-grade materials: thermal tiles, MLI blanket foil, brushed metal, scorched engine bells
+  - decals and panel lines
+  - lit by the hangar, with believable reflections
+- **Telescope:** anodised aluminium, a carbon-fibre tube, a matte black baffle, optics with coated-glass reflections and engraved scales.
+- **Glass:** windows and the walkway are real glass, with thin reflections, slight tint and smudges.
+- **Lighting that sells it:**
+  - an environment map (PMREM, e.g. `RoomEnvironment` or a captured interior) so metals and glass reflect
+  - soft shadows where cheap enough
+  - tuned tone mapping and exposure
+  - no overexposure (the scene has blown out before, so watch bloom and light intensities)
+
+### How to get the textures
+- **Option A (no assets):** high-resolution procedural PBR maps generated on canvas or in shaders. This extends `world/textures.ts`, which currently holds the simple canvas textures.
+- **Option B (preferred if it looks clearly better):** CC0 PBR texture sets from **ambientCG** or **Poly Haven**, saved under `public/textures/`. Keep the total size reasonable, use compressed JPG/WebP and KTX2 if you add the loader, and credit the source in `README.md`.
+- Downloading files needs the user's explicit OK, so ask once with the list of sets and their sizes.
+- Don't add npm dependencies without a strong reason; three's own `examples/jsm` loaders are fine.
+- Keep it running smoothly (60 fps on a laptop): reuse materials and textures, use mipmaps and anisotropy, and don't use dozens of shadow-casting lights.
+
+### Keep working
+- Interactions, modes, the shared subject, Nansen data, the robot chat, the PC terminal, the launch and docking.
+- Verify visually after each area: screenshot each room in your own browser tab, at desktop width and up close.
+- Commit after each area.
+
+Before you start, confirm the dev server runs and `npm run typecheck` passes. Then begin with whichever of the four areas the user names, or with mission control and the robot if they don't say.
