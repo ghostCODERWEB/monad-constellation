@@ -1,10 +1,6 @@
-'use client';
+import { redirect } from 'next/navigation';
 
-import dynamic from 'next/dynamic';
-import './station.css';
-
-const Station = dynamic(() => import('@/station/Station'), { ssr: false, loading: () => <div className="st-loading">Pressurising the station…</div> });
-
+// The station moved to the home page.
 export default function StationPage() {
-  return <Station />;
+  redirect('/');
 }

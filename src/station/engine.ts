@@ -71,6 +71,8 @@ export class Engine {
   private clock = new THREE.Clock();
   private toast: { text: string; until: number } | null = null;
   private el: HTMLElement;
+  /** A mode can take over rendering entirely (the telescope eyepiece). */
+  renderOverride: ((dt: number) => boolean) | null = null;
   /** Per-frame hooks for features: telescope motors, screens, eggs. */
   tickers: ((dt: number, t: number) => void)[] = [];
 
@@ -193,6 +195,7 @@ export class Engine {
     const el = this.el;
     // Aboard, the hull's outside faces would wall off every hatch; outside, it is the station.
     this.station.hull.visible = !this.station.space.contains(this.camera.position, 0);
+    if (this.renderOverride?.(dt)) return;
     this.sky.update(this.t, this.camera.getWorldQuaternion(new THREE.Quaternion()), el.clientWidth / el.clientHeight, this.camera.fov);
     // Sunlight through the windows follows the orbit and dies in Earth's shadow.
     this.sun.position.copy(this.camera.position).addScaledVector(this.sky.sunDir, 30);

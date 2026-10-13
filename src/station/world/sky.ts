@@ -26,6 +26,12 @@ const EARTH_STYLE: WorldStyle = {
 
 export interface Sky {
   scene: THREE.Scene;
+  /** The inertial frame: stars and the Moon. Turns once per orbit as seen from the station. */
+  inertial: THREE.Group;
+  /** Orbital phase, radians. */
+  phase: number;
+  /** The Sun's direction in the inertial frame (fixed). */
+  sunBase: THREE.Vector3;
   camera: THREE.PerspectiveCamera;
   earth: World;
   /** The Earth's frame: rotating it carries the ground beneath the station. */
@@ -76,15 +82,18 @@ export function buildSky(): Sky {
   const sg = new THREE.BufferGeometry();
   sg.setAttribute('position', new THREE.BufferAttribute(pos, 3));
   sg.setAttribute('color', new THREE.BufferAttribute(col, 3));
-  scene.add(new THREE.Points(sg, new THREE.PointsMaterial({ size: 1.8, sizeAttenuation: false, vertexColors: true, map: soft(), transparent: true, depthWrite: false })));
+  const inertial = new THREE.Group();
+  scene.add(inertial);
+  inertial.add(new THREE.Points(sg, new THREE.PointsMaterial({ size: 1.8, sizeAttenuation: false, vertexColors: true, map: soft(), transparent: true, depthWrite: false })));
 
   // Sun and Moon: placed to show their true apparent sizes (about half a degree).
   const sunPos = { value: new THREE.Vector3() };
   const sun = buildSun(1300);
   sun.light.intensity = 0;
   scene.add(sun.group);
-  const moon = buildMoon(540, '#c8c8d0', 7, sunPos);
-  scene.add(moon);
+  const moon = buildMoon(270, '#c8c8d0', 7, sunPos);
+  inertial.add(moon);
+  moon.position.set(-30_000, 22_000, -45_000);
 
   // Earth hangs below; its frame turns to carry continents under the station.
   const earthPivot = new THREE.Group();
@@ -97,20 +106,22 @@ export function buildSky(): Sky {
   earth.spinner.rotation.y = 1.2;
 
   const sunDir = new THREE.Vector3();
+  const sunBase = new THREE.Vector3(0.92, 0, 0.39).normalize();
   const sky: Sky = {
-    scene, camera, earth, earthPivot, moon, sun, sunPos, sunDir, sunlit: 1, earthDay: 1,
+    scene, inertial, phase: 0, sunBase, camera, earth, earthPivot, moon, sun, sunPos, sunDir, sunlit: 1, earthDay: 1,
     update(t, camQuat, aspect, fov) {
       // The orbit: the Sun swings round the station once per orbit, and the
       // ground beneath slides past at the same rate.
       const phase = (t / ORBIT_SECONDS) * Math.PI * 2;
-      sunDir.set(Math.cos(phase) * 0.92, Math.sin(phase) * 0.92, 0.39).normalize();
+      sky.phase = phase;
+      inertial.rotation.z = phase;
+      sunDir.copy(sunBase).applyAxisAngle(new THREE.Vector3(0, 0, 1), phase);
       // Keep the Sun overhead-ish at the start so the first view is lit.
       sunPos.value.copy(sunDir).multiplyScalar(140_000);
       sun.group.position.copy(sunPos.value);
       earthPivot.rotation.z = -phase * 0.25;
       earth.spinner.rotation.y = 1.2 + t * 0.002;
       earth.clouds.rotation.y += 0.00002;
-      moon.position.set(Math.cos(phase * 0.08 + 2) * 60_000, 18_000, Math.sin(phase * 0.08 + 2) * 60_000);
 
       // Eclipse: is the Sun behind Earth, as seen from the station?
       const toEarth = new THREE.Vector3(0, -1, 0);

@@ -4,7 +4,7 @@ import * as THREE from 'three';
 import type { WorldStyle } from '@/lib/worldStyle';
 
 // 3D simplex noise (Ashima Arts / Ian McEwan, MIT licence) and fBm.
-const NOISE = /* glsl */ `
+export const NOISE = /* glsl */ `
   vec3 mod289(vec3 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
   vec4 mod289(vec4 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
   vec4 permute(vec4 x) { return mod289(((x * 34.0) + 1.0) * x); }
@@ -48,6 +48,8 @@ const NOISE = /* glsl */ `
     m = m * m;
     return 42.0 * dot(m * m, vec4(dot(p0, x0), dot(p1, x1), dot(p2, x2), dot(p3, x3)));
   }
+  // smoothstep with either edge order: the built-in is undefined when edge0 > edge1.
+  float ss(float e0, float e1, float x) { float t = clamp((x - e0) / (e1 - e0), 0.0, 1.0); return t * t * (3.0 - 2.0 * t); }
   float fbm(vec3 p, int oct) {
     float a = 0.5, s = 0.0;
     for (int i = 0; i < 10; i++) {

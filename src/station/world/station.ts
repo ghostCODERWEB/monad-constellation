@@ -91,8 +91,40 @@ export function buildStation(): Station {
     put(-(w / 2 + hh) / 2, 0, w / 2 - hh, hh * 2);
   };
 
+  /**
+   * A face with windows cut through it: `rects` are [x0, y0, x1, y1] in the
+   * face's u/v frame. A rect marked `open` is a doorway (no glass); the rest
+   * get glass and a metal bezel. UVs are normalised so the panel texture tiles
+   * as it does on a plain face.
+   */
+  const windowFace = (c: THREE.Vector3, n: THREE.Vector3, u: THREE.Vector3, w: number, h: number, rects: { r: [number, number, number, number]; open?: boolean }[], mat: THREE.Material = wallMat) => {
+    const v = new THREE.Vector3().crossVectors(n, u).normalize();
+    const shape = new THREE.Shape([new THREE.Vector2(-w / 2, -h / 2), new THREE.Vector2(w / 2, -h / 2), new THREE.Vector2(w / 2, h / 2), new THREE.Vector2(-w / 2, h / 2)]);
+    for (const { r: [x0, y0, x1, y1] } of rects) shape.holes.push(new THREE.Path([new THREE.Vector2(x0, y0), new THREE.Vector2(x0, y1), new THREE.Vector2(x1, y1), new THREE.Vector2(x1, y0)]));
+    const geo = new THREE.ShapeGeometry(shape);
+    const uv = geo.attributes.uv as THREE.BufferAttribute;
+    for (let i = 0; i < uv.count; i++) uv.setXY(i, (uv.getX(i) + w / 2) / w, (uv.getY(i) + h / 2) / h);
+    const g = new THREE.Group();
+    g.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(u, v, n));
+    g.position.copy(c);
+    g.add(new THREE.Mesh(geo, mat));
+    for (const { r: [x0, y0, x1, y1], open } of rects) {
+      if (open) continue;
+      const pane = new THREE.Mesh(new THREE.PlaneGeometry(x1 - x0, y1 - y0), glass);
+      pane.position.set((x0 + x1) / 2, (y0 + y1) / 2, -0.03);
+      g.add(pane);
+      const t = 0.07;
+      for (const [x, y, bw, bh] of [[(x0 + x1) / 2, y1 + t / 2, x1 - x0 + t * 2, t], [(x0 + x1) / 2, y0 - t / 2, x1 - x0 + t * 2, t], [x0 - t / 2, (y0 + y1) / 2, t, y1 - y0], [x1 + t / 2, (y0 + y1) / 2, t, y1 - y0]]) {
+        const b = new THREE.Mesh(new THREE.BoxGeometry(bw, bh, 0.12), frameMat);
+        b.position.set(x, y, 0);
+        g.add(b);
+      }
+    }
+    add(g);
+  };
+
   /** A hatch frame around a square opening, with the hatch door swung aside. */
-  const hatch = (c: THREE.Vector3, n: THREE.Vector3, half: number, open = true) => {
+  const hatch = (c: THREE.Vector3, n: THREE.Vector3, half: number, open = true, swing = 1) => {
     const g = new THREE.Group();
     const t = 0.12, d = 0.18;
     const parts: [number, number, number, number][] = [[0, half + t / 2, half * 2 + t * 2, t], [0, -half - t / 2, half * 2 + t * 2, t], [half + t / 2, 0, t, half * 2], [-half - t / 2, 0, t, half * 2]];
@@ -114,7 +146,8 @@ export function buildStation(): Station {
     const handle = new THREE.Mesh(new THREE.TorusGeometry(0.12, 0.02, 8, 16, Math.PI), railMat);
     handle.position.set(half * 1.6, 0, 0.06);
     pivot.add(handle);
-    pivot.rotation.y = open ? -Math.PI * 0.55 : 0;
+    pivot.rotation.y = open ? -Math.PI * 0.55 * swing : 0;
+    if (swing < 0) { pivot.position.x = half; slab.position.x = -half; handle.position.x = -half * 1.6; }
     g.add(pivot);
     door = pivot;
     g.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), n);
@@ -206,7 +239,11 @@ export function buildStation(): Station {
   // ---------- hub: mission control node ----------
   const H = 2.4;
   space.add(box('hub', 'Mission control', [-H, -H, -H], [H, H, H]));
-  face(V(0, 0, -H), V(0, 0, 1), V(1, 0, 0), H * 2, H * 2, 0.95);     // south: hangar tunnel
+  // South: the hangar tunnel hatch, flanked by a gallery of windows onto the hangar.
+  windowFace(V(0, 0, -H), V(0, 0, 1), V(1, 0, 0), H * 2, H * 2, [
+    { r: [-0.95, -0.95, 0.95, 0.95], open: true },
+    { r: [-2.15, -1.55, -1.25, 1.75] }, { r: [1.25, -1.55, 2.15, 1.75] }, { r: [-0.95, 1.2, 0.95, 1.75] },
+  ]);
   face(V(0, 0, H), V(0, 0, -1), V(-1, 0, 0), H * 2, H * 2, 0.85);    // north: airlock
   face(V(H, 0, 0), V(-1, 0, 0), V(0, 0, 1), H * 2, H * 2, 0.95);     // east: research
   face(V(-H, 0, 0), V(1, 0, 0), V(0, 0, -1), H * 2, H * 2, 0.95);    // west: habitation
@@ -268,7 +305,7 @@ export function buildStation(): Station {
 
   // Research module (east).
   door('Research module', 'x', 2.2, 3.0, 0.95);
-  hatch(V(H + 0.0, 0, 0), V(-1, 0, 0), 0.95);
+  hatch(V(H + 0.0, 0, 0), V(-1, 0, 0), 0.95, true, -1); // swings north, clear of the hangar gallery
   moduleX('Research module', 2.8, 11.2, 1.5, { seed: 1 });
   face(V(2.8, 0, 0), V(1, 0, 0), V(0, 0, -1), 3, 3, 0.95);
   face(V(11.2, 0, 0), V(-1, 0, 0), V(0, 0, 1), 3, 3, 0.95);
@@ -379,14 +416,24 @@ export function buildStation(): Station {
 
   // Tunnel and hangar (south).
   door('Hangar', 'z', -3.0, -2.2, 0.95);
-  hatch(V(0, 0, -H), V(0, 0, 1), 0.95);
+  // This hatch slides into the wall rather than swinging, so the gallery windows stay clear.
+  hatch(V(0, 0, -H), V(0, 0, 1), 0.95).visible = false;
   space.add(cyl('Hangar tunnel', 'Hangar', 'z', -5.2, -2.8, 0, 0, 1.15));
   door('Hangar', 'z', -5.6, -4.8, 0.95);
   {
-    const shell = new THREE.Mesh(new THREE.CylinderGeometry(1.17, 1.17, 2.4, 32, 1, true), new THREE.MeshStandardMaterial({ map: panelTexture([3, 1]), roughness: 0.6, side: THREE.BackSide }));
+    // A glass walkway: the shuttle is on show from the moment you leave mission control.
+    const shell = new THREE.Mesh(new THREE.CylinderGeometry(1.17, 1.17, 2.4, 32, 1, true), glass);
     shell.rotation.x = Math.PI / 2;
     shell.position.set(0, 0, -4.0);
     add(shell);
+    for (const z of [-2.55, -3.2, -4.0, -4.8, -5.1]) {
+      const rib = new THREE.Mesh(new THREE.TorusGeometry(1.17, 0.035, 8, 40), frameMat);
+      rib.position.set(0, 0, z);
+      add(rib);
+    }
+    const floor = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.04, 2.4), frameMat);
+    floor.position.set(0, -1.05, -4.0);
+    add(floor);
     for (const x of [-0.9, 0.9]) {
       const a = V(x, 0.4, -2.9), b = V(x, 0.4, -5.1);
       rails.push({ a, b });
@@ -401,7 +448,11 @@ export function buildStation(): Station {
     face(V(0, HG.y, cz), V(0, -1, 0), V(1, 0, 0), HG.x * 2, len, undefined, hangarMat);
     face(V(-HG.x, 0, cz), V(1, 0, 0), V(0, 0, 1), len, HG.y * 2, undefined, hangarMat);
     face(V(HG.x, 0, cz), V(-1, 0, 0), V(0, 0, -1), len, HG.y * 2, undefined, hangarMat);
-    face(V(0, 0, HG.z1), V(0, 0, -1), V(-1, 0, 0), HG.x * 2, HG.y * 2, 0.95, hangarMat);
+    // The hangar's station-side wall is mostly glass: the shuttle is on show from mission control.
+    windowFace(V(0, 0, HG.z1), V(0, 0, -1), V(-1, 0, 0), HG.x * 2, HG.y * 2, [
+      { r: [-0.95, -0.95, 0.95, 0.95], open: true },
+      { r: [-5.2, -2.6, -1.4, 2.9] }, { r: [1.4, -2.6, 5.2, 2.9] }, { r: [-1.4, 1.4, 1.4, 2.9] },
+    ], hangarMat);
     // Floor markings and docking lights.
     for (let z = HG.z0 + 1; z < HG.z1 - 0.5; z += 2) {
       const m = new THREE.Mesh(new THREE.PlaneGeometry(0.4, 1), new THREE.MeshStandardMaterial({ color: 0xfacc15, emissive: 0x806600, emissiveIntensity: 0.4 }));
@@ -415,7 +466,7 @@ export function buildStation(): Station {
       add(l);
     }
     const sign = plane(3.4, 0.5, new THREE.MeshStandardMaterial({ map: labelTexture(['PLEASE SECURE ALL BELONGINGS, INCLUDING YOUR EXPECTATIONS'], { bg: '#1f2937', fg: '#facc15', w: 1024, h: 150, font: 30 }) }));
-    sign.position.set(0, 2.8, HG.z1 - 0.05);
+    sign.position.set(0, 3.4, HG.z1 - 0.05);
     sign.rotation.y = Math.PI;
     add(sign);
     for (const [x, y] of [[-3, 2.5], [3, 2.5]]) {
@@ -447,7 +498,7 @@ export function buildStation(): Station {
 
   // ---------- mission patches ----------
   const patchMat = new THREE.MeshStandardMaterial({ map: patchTexture(), transparent: true, roughness: 0.7 });
-  for (const [pos, rotY] of [[V(0, 1.6, -H + 0.03), 0], [V(0, 1.6, H - 0.03), Math.PI], [V(13.0, 1.5, -OS + 0.03), 0]] as const) {
+  for (const [pos, rotY] of [[V(0, 1.6, H - 0.03), Math.PI], [V(13.0, 1.5, -OS + 0.03), 0]] as const) {
     const p = plane(0.6, 0.6, patchMat);
     p.position.copy(pos);
     p.rotation.y = rotY;
@@ -564,7 +615,7 @@ export function buildStation(): Station {
     airlockOuter: V(0, 0, 6.5),
     airlockConsole: V(1.0, 0.4, 3.4),
     hangarConsole: V(-1.4, 0.6, -5.6),
-    shuttleDock: V(0, -0.6, -14),
+    shuttleDock: V(0, -0.6, -11.5),
     sleeping: V(-4.6, 0, 1.4),
     galley: V(-8.2, 0, -1.4),
     cupola: V(14.6, -1.6, 0),

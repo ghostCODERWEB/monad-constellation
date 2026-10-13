@@ -365,3 +365,10 @@ kbd {
 .code { margin: 0; padding: 10px 12px; border-radius: 12px; background: rgba(0, 0, 0, 0.35); border: 1px solid var(--line); font-size: 11px; line-height: 1.5; color: #c4b5fd; white-space: pre-wrap; }
 @media (max-width: 1100px) { .regbtn { bottom: 150px; } }
 @media (max-width: 1100px) { .dossier { bottom: 150px; } }
+
+.to-station {
+  position: fixed; left: 220px; top: 24px; z-index: 30; padding: 7px 12px; border-radius: 8px;
+  background: rgba(10, 12, 24, 0.7); border: 1px solid rgba(160, 140, 255, 0.3); color: #cfc8ff;
+  font: 500 12px/1 system-ui, sans-serif; text-decoration: none; backdrop-filter: blur(6px);
+}
+.to-station:hover { border-color: rgba(160, 140, 255, 0.7); color: #fff; }

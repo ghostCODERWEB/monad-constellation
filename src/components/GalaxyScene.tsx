@@ -121,7 +121,7 @@ const STAR_FS = /* glsl */ `
   void main() {
     float d = length(gl_PointCoord - 0.5);
     if (d > 0.5) discard;
-    float core = smoothstep(0.18, 0.0, d);
+    float core = 1.0 - smoothstep(0.0, 0.18, d);
     float glow = exp(-d * d * 22.0);
     gl_FragColor = vec4(vColor * (0.9 + core * 1.6), (glow * 0.9 + core) * vAlpha);
   }`;
