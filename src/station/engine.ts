@@ -96,7 +96,7 @@ export class Engine {
     this.scene.add(this.camera);
     const pm = new THREE.PMREMGenerator(this.renderer);
     this.scene.environment = pm.fromScene(interiorEnvironment(), 0.03).texture;
-    this.scene.environmentIntensity = 0.55;
+    this.scene.environmentIntensity = 0.42;
 
     this.sky = buildSky();
     this.station = buildStation();

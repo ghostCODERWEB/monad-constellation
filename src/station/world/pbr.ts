@@ -268,7 +268,7 @@ export function quiltedBlanket(): Blanket {
 export function blanketMaterial() {
   const b = quiltedBlanket();
   const m = new THREE.MeshPhysicalMaterial({
-    map: b.map, normalMap: b.normalMap, normalScale: new THREE.Vector2(0.8, 0.8),
+    map: b.map, normalMap: b.normalMap, normalScale: new THREE.Vector2(0.45, 0.45),
     roughnessMap: b.roughnessMap, roughness: 1, metalnessMap: b.metalnessMap, metalness: 1,
     aoMap: b.aoMap, aoMapIntensity: 0.85, sheen: 0.5, sheenRoughness: 0.9, sheenColor: new THREE.Color(0xfff6e6),
   });

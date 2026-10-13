@@ -7,6 +7,8 @@
 // C catalog, E or Esc back to zero-g. Gamepad: sticks aim, triggers zoom,
 // bumpers focus, X track, Y exit.
 import * as THREE from 'three';
+import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
+import { glassSmudge, normalFromHeight, pbrSet, scaleUV } from '../world/pbr';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
@@ -90,84 +92,158 @@ export function installTelescope(e: Engine) {
   // ---------- the instrument ----------
   const rig = new THREE.Group();
   rig.position.copy(a.telescopeBase);
-  const white = new THREE.MeshStandardMaterial({ color: 0xeceae5, roughness: 0.35, metalness: 0.3 });
-  const black = new THREE.MeshStandardMaterial({ color: 0x18181b, roughness: 0.5, metalness: 0.5 });
-  const metal = new THREE.MeshStandardMaterial({ color: 0xb6b8c0, roughness: 0.25, metalness: 0.9 });
+  // Anodised aluminium (pearl white), a carbon-fibre tube, matte black baffles, bare brushed steel.
+  const white = pbrSet('brushed-aluminium', { color: 0xf1f0ec, normal: 0.55, roughness: 0.8, clearcoat: 0.35, clearcoatRoughness: 0.25 });
+  white.color.setRGB(1.65, 1.65, 1.6); white.metalness = 0.22; // pearl-white anodise, not bare metal
+  const carbon = pbrSet('carbon-weave', { color: 0xd9dee6, normal: 1.3, roughness: 0.85, clearcoat: 1, clearcoatRoughness: 0.06 });
+  const black = pbrSet('rubber', { color: 0x08090b, normal: 1.6, roughness: 1 });
+  const metal = pbrSet('brushed-aluminium', { color: 0xc7ccd4, normal: 0.7, roughness: 0.7 });
   const purple = new THREE.MeshStandardMaterial({ color: 0x836ef9, emissive: 0x836ef9, emissiveIntensity: 0.8 });
-  const pedestal = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.22, 1.4, 24), white);
+  const G = <T extends THREE.BufferGeometry>(geo: T, u = 1, v = 1) => scaleUV(geo, u, v);
+  /** Engraved setting circle: tick marks every degree, numbers every 30°, filled with black paint, baked normal. */
+  const circleTex = (arc: number, labels: number) => {
+    const N = 1024;
+    const A = document.createElement('canvas'); A.width = A.height = N;
+    const B = document.createElement('canvas'); B.width = B.height = N;
+    const a = A.getContext('2d')!, h = B.getContext('2d')!;
+    a.fillStyle = '#c9ced6'; a.fillRect(0, 0, N, N); h.fillStyle = '#808080'; h.fillRect(0, 0, N, N);
+    a.translate(N / 2, N / 2); h.translate(N / 2, N / 2);
+    const steps = Math.round(arc);
+    for (let i = 0; i <= steps; i++) {
+      const ang = (i / steps) * (arc >= 360 ? Math.PI * 2 : (arc * Math.PI) / 180) - Math.PI / 2;
+      const big = i % 10 === 0, mid = i % 5 === 0;
+      const r1 = N * 0.47, r0 = r1 - (big ? 70 : mid ? 46 : 28);
+      for (const [g, col, w] of [[a, '#16171b', big ? 5 : 3], [h, '#202020', big ? 6 : 4]] as const) {
+        g.strokeStyle = col; g.lineWidth = w; g.beginPath(); g.moveTo(Math.cos(ang) * r0, Math.sin(ang) * r0); g.lineTo(Math.cos(ang) * r1, Math.sin(ang) * r1); g.stroke();
+      }
+      if (i % labels === 0) {
+        for (const [g, col] of [[a, '#16171b'], [h, '#303030']] as const) {
+          g.save(); g.rotate(ang + Math.PI / 2); g.fillStyle = col; g.font = '700 34px "Helvetica Neue", Arial, sans-serif'; g.textAlign = 'center'; g.fillText(String(arc >= 360 ? i % 360 : i), 0, -(r0 - 24)); g.restore();
+        }
+      }
+    }
+    const map = new THREE.CanvasTexture(A); map.colorSpace = THREE.SRGBColorSpace; map.anisotropy = 16;
+    const normalMap = new THREE.CanvasTexture(normalFromHeight(B, 3)); normalMap.anisotropy = 16;
+    return new THREE.MeshStandardMaterial({ map, normalMap, roughness: 0.55, metalness: 0.6 });
+  };
+  const pedestal = new THREE.Mesh(G(new THREE.CylinderGeometry(0.16, 0.22, 1.4, 48), 4, 3), white);
   pedestal.position.y = -0.8;
   rig.add(pedestal);
-  const footRing = new THREE.Mesh(new THREE.TorusGeometry(0.28, 0.03, 10, 32), metal);
+  for (const y of [-0.3, -1.3]) { // clamp bands with bolts
+    const band = new THREE.Mesh(G(new THREE.TorusGeometry(y > -1 ? 0.18 : 0.215, 0.012, 12, 48), 10, 1), metal);
+    band.rotation.x = Math.PI / 2; band.position.y = y - 0.0; rig.add(band);
+  }
+  const footRing = new THREE.Mesh(G(new THREE.TorusGeometry(0.28, 0.03, 16, 48), 12, 1), metal);
   footRing.rotation.x = Math.PI / 2;
   footRing.position.y = -1.48;
   rig.add(footRing);
   const azimuth = new THREE.Group();
   rig.add(azimuth);
-  const azGear = new THREE.Mesh(new THREE.CylinderGeometry(0.26, 0.26, 0.08, 48), metal);
+  const azGear = new THREE.Mesh(G(new THREE.CylinderGeometry(0.26, 0.26, 0.08, 96), 6, 1), metal);
   azimuth.add(azGear);
+  const azScale = new THREE.Mesh(new THREE.RingGeometry(0.11, 0.255, 96), circleTex(360, 30)); // azimuth setting circle
+  azScale.rotation.x = -Math.PI / 2; azScale.position.y = 0.0415; azimuth.add(azScale);
   for (let i = 0; i < 48; i++) {
     const tooth = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.06, 0.03), metal);
     tooth.position.set(Math.cos(i / 48 * Math.PI * 2) * 0.27, 0, Math.sin(i / 48 * Math.PI * 2) * 0.27);
     tooth.rotation.y = -i / 48 * Math.PI * 2;
     azimuth.add(tooth);
   }
+  const altScale = circleTex(90, 10);
   for (const x of [-0.34, 0.34]) {
-    const arm = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.7, 0.16), white);
+    const arm = new THREE.Mesh(G(new RoundedBoxGeometry(0.08, 0.7, 0.16, 4, 0.012), 1, 3), white);
     arm.position.set(x, 0.38, 0);
     azimuth.add(arm);
-    const motor = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 0.12, 20), black);
+    const motor = new THREE.Mesh(G(new THREE.CylinderGeometry(0.07, 0.07, 0.12, 40), 4, 1), black);
     motor.rotation.z = Math.PI / 2;
     motor.position.set(x * 1.3, 0.62, 0);
     azimuth.add(motor);
-    const led = new THREE.Mesh(new THREE.SphereGeometry(0.012, 8, 8), new THREE.MeshBasicMaterial({ color: 0x22c55e }));
+    const cap = new THREE.Mesh(G(new THREE.CylinderGeometry(0.072, 0.072, 0.012, 40), 4, 1), metal); // motor end cap
+    cap.rotation.z = Math.PI / 2; cap.position.set(x * 1.3 + Math.sign(x) * 0.066, 0.62, 0); azimuth.add(cap);
+    const dial = new THREE.Mesh(new THREE.CircleGeometry(0.13, 64), altScale); // altitude circle on the arm's inner face
+    dial.rotation.y = -Math.sign(x) * Math.PI / 2; dial.position.set(x - Math.sign(x) * 0.0425, 0.62, 0); azimuth.add(dial);
+    const led = new THREE.Mesh(new THREE.SphereGeometry(0.012, 16, 12), new THREE.MeshBasicMaterial({ color: 0x22c55e }));
     led.position.set(x * 1.3, 0.62, 0.075);
     led.userData.led = true;
     azimuth.add(led);
+    for (let k = 0; k < 4; k++) { // bolts through the arm base
+      const bolt = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.008, 0.01, 10), metal);
+      bolt.position.set(x, 0.06 + k * 0.0, (k % 2 ? 1 : -1) * 0.055); bolt.position.y = 0.05 + (k > 1 ? 0.05 : 0);
+      bolt.rotation.x = Math.PI / 2; bolt.position.x = x + 0.0; bolt.position.z = 0.0816 * (k % 2 ? 1 : -1);
+      azimuth.add(bolt);
+    }
   }
   const altitude = new THREE.Group();
   altitude.position.y = 0.62;
   azimuth.add(altitude);
   const tube = new THREE.Group();
   altitude.add(tube);
-  const ota = new THREE.Mesh(new THREE.CylinderGeometry(0.27, 0.27, 2.0, 40, 1, true), white);
+  const ota = new THREE.Mesh(G(new THREE.CylinderGeometry(0.27, 0.27, 2.0, 96, 1, true), 8, 6), carbon);
   ota.rotation.x = Math.PI / 2;
   tube.add(ota);
-  const dew = new THREE.Mesh(new THREE.CylinderGeometry(0.29, 0.29, 0.5, 40, 1, true), black);
+  const otaIn = new THREE.Mesh(new THREE.CylinderGeometry(0.268, 0.268, 2.0, 48, 1, true), black); // matte baffle inside
+  otaIn.material = Object.assign((black as THREE.MeshPhysicalMaterial).clone(), { side: THREE.BackSide });
+  otaIn.rotation.x = Math.PI / 2; tube.add(otaIn);
+  const dew = new THREE.Mesh(G(new THREE.CylinderGeometry(0.29, 0.29, 0.5, 64, 1, true), 8, 2), black);
   dew.rotation.x = Math.PI / 2;
   dew.position.z = -1.2;
   tube.add(dew);
-  const lens = new THREE.Mesh(new THREE.CircleGeometry(0.26, 40), new THREE.MeshPhysicalMaterial({ color: 0x1e1b4b, roughness: 0.02, metalness: 0.2, clearcoat: 1, iridescence: 0.8 }));
+  const dewIn = new THREE.Mesh(new THREE.CylinderGeometry(0.288, 0.288, 0.5, 48, 1, true), Object.assign((black as THREE.MeshPhysicalMaterial).clone(), { side: THREE.BackSide }));
+  dewIn.rotation.x = Math.PI / 2; dewIn.position.z = -1.2; tube.add(dewIn);
+  // Coated objective: a deep violet anti-reflection coating under a hard clearcoat.
+  const lens = new THREE.Mesh(new THREE.CircleGeometry(0.262, 64), new THREE.MeshPhysicalMaterial({ color: 0x0c0a22, roughness: 0.03, metalness: 0.1, clearcoat: 1, clearcoatRoughness: 0.01, iridescence: 1, iridescenceIOR: 1.38, iridescenceThicknessRange: [180, 420], envMapIntensity: 2.6 }));
   lens.position.z = -1.0;
   lens.rotation.y = Math.PI;
   tube.add(lens);
+  const retainer = new THREE.Mesh(G(new THREE.TorusGeometry(0.262, 0.016, 16, 64), 14, 1), metal);
+  retainer.position.z = -1.0; tube.add(retainer);
+  for (let i = 0; i < 12; i++) { // retainer set screws
+    const a = (i / 12) * Math.PI * 2;
+    const sc = new THREE.Mesh(new THREE.CylinderGeometry(0.007, 0.007, 0.012, 10), metal);
+    sc.position.set(Math.cos(a) * 0.274, Math.sin(a) * 0.274, -1.0 + 0.01); sc.rotation.x = Math.PI / 2; tube.add(sc);
+  }
   for (const z of [-0.6, 0.0, 0.6]) {
-    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.28, 0.022, 10, 40), metal);
+    const ring = new THREE.Mesh(G(new THREE.TorusGeometry(0.28, 0.022, 16, 64), 14, 1), metal);
     ring.position.z = z;
     tube.add(ring);
   }
-  const back = new THREE.Mesh(new THREE.CylinderGeometry(0.27, 0.22, 0.2, 40), black);
+  const back = new THREE.Mesh(G(new THREE.CylinderGeometry(0.27, 0.22, 0.2, 64), 6, 1), black);
   back.rotation.x = Math.PI / 2;
   back.position.z = 1.1;
   tube.add(back);
-  const focuser = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 0.2, 20), metal);
+  const focuser = new THREE.Mesh(G(new THREE.CylinderGeometry(0.06, 0.06, 0.2, 40), 3, 1), metal);
   focuser.rotation.x = Math.PI / 2;
   focuser.position.set(0, 0, 1.3);
   tube.add(focuser);
-  const focusKnob = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.05, 16), black);
+  const focusKnob = new THREE.Mesh(G(new THREE.CylinderGeometry(0.05, 0.05, 0.05, 40), 6, 1), black); // knurled rubber knob
   focusKnob.rotation.z = Math.PI / 2;
   focusKnob.position.set(0.09, 0, 1.3);
   tube.add(focusKnob);
-  const diag = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.08, 0.08), black);
+  const diag = new THREE.Mesh(G(new RoundedBoxGeometry(0.08, 0.08, 0.08, 3, 0.01), 1, 1), black);
   diag.position.set(0, 0, 1.43);
   tube.add(diag);
-  const eyepiece = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.035, 0.12, 16), black);
+  const eyepiece = new THREE.Mesh(G(new THREE.CylinderGeometry(0.03, 0.035, 0.12, 32), 3, 1), metal);
   eyepiece.position.set(0, 0.09, 1.43);
   tube.add(eyepiece);
-  const finder = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 0.5, 16), white);
+  const eyeCup = new THREE.Mesh(G(new THREE.CylinderGeometry(0.036, 0.032, 0.03, 32), 3, 1), black);
+  eyeCup.position.set(0, 0.16, 1.43); tube.add(eyeCup);
+  const eyeLens = new THREE.Mesh(new THREE.CircleGeometry(0.026, 32), new THREE.MeshPhysicalMaterial({ color: 0x050514, roughness: 0.02, clearcoat: 1, iridescence: 1, envMapIntensity: 2.4 }));
+  eyeLens.rotation.x = -Math.PI / 2; eyeLens.position.set(0, 0.176, 1.43); tube.add(eyeLens);
+  const finder = new THREE.Mesh(G(new THREE.CylinderGeometry(0.045, 0.045, 0.5, 40), 3, 2), white);
   finder.rotation.x = Math.PI / 2;
   finder.position.set(0, 0.36, -0.2);
   tube.add(finder);
-  const stripe = new THREE.Mesh(new THREE.CylinderGeometry(0.272, 0.272, 0.05, 40, 1, true), purple);
+  for (const z of [-0.38, -0.02]) { // finder rings with thumbscrews
+    const fr = new THREE.Mesh(G(new THREE.TorusGeometry(0.05, 0.01, 12, 32), 8, 1), metal);
+    fr.position.set(0, 0.36, z); tube.add(fr);
+    const post = new THREE.Mesh(G(new THREE.CylinderGeometry(0.012, 0.012, 0.08, 12), 1, 1), metal);
+    post.position.set(0, 0.31, z); tube.add(post);
+  }
+  const finderLens = new THREE.Mesh(new THREE.CircleGeometry(0.04, 32), new THREE.MeshPhysicalMaterial({ color: 0x0c0a22, roughness: 0.03, clearcoat: 1, iridescence: 1, envMapIntensity: 2.4 }));
+  finderLens.position.set(0, 0.36, -0.451); finderLens.rotation.y = Math.PI; tube.add(finderLens);
+  const dovetail = new THREE.Mesh(G(new THREE.BoxGeometry(0.07, 0.025, 1.3), 1, 6), metal); // dovetail bar under the tube
+  dovetail.position.set(0, -0.3, 0.1); tube.add(dovetail);
+  const stripe = new THREE.Mesh(new THREE.CylinderGeometry(0.272, 0.272, 0.05, 64, 1, true), purple);
   stripe.rotation.x = Math.PI / 2;
   stripe.position.z = -0.3;
   tube.add(stripe);
@@ -181,14 +257,20 @@ export function installTelescope(e: Engine) {
   // The console beside it: star map, coordinates, status.
   const consoleScreen = liveScreen(640, 400);
   const consoleGroup = new THREE.Group();
-  const stand = new THREE.Mesh(new THREE.BoxGeometry(0.08, 1.0, 0.08), white);
+  const stand = new THREE.Mesh(G(new THREE.BoxGeometry(0.08, 1.0, 0.08), 1, 5), white);
   stand.position.y = -0.7;
   consoleGroup.add(stand);
-  const bezel = new THREE.Mesh(new THREE.BoxGeometry(0.86, 0.56, 0.05), black);
+  const base = new THREE.Mesh(G(new THREE.CylinderGeometry(0.16, 0.2, 0.04, 48), 4, 1), metal);
+  base.position.y = -1.21; consoleGroup.add(base);
+  const bezel = new THREE.Mesh(new RoundedBoxGeometry(0.86, 0.56, 0.05, 4, 0.012), new THREE.MeshPhysicalMaterial({ color: 0x15171b, roughness: 0.42, metalness: 0.15, clearcoat: 0.3, clearcoatRoughness: 0.35 }));
   consoleGroup.add(bezel);
   const screen = new THREE.Mesh(new THREE.PlaneGeometry(0.8, 0.5), new THREE.MeshBasicMaterial({ map: consoleScreen.texture }));
   screen.position.z = 0.026;
   consoleGroup.add(screen);
+  const cover = new THREE.Mesh(new THREE.PlaneGeometry(0.8, 0.5), new THREE.MeshPhysicalMaterial({ color: 0xcfe2ff, transparent: true, opacity: 0.1, roughness: 1, roughnessMap: glassSmudge(), clearcoat: 1, clearcoatRoughness: 0.03, depthWrite: false }));
+  cover.position.z = 0.0275; consoleGroup.add(cover);
+  const arm = new THREE.Mesh(G(new THREE.CylinderGeometry(0.018, 0.018, 0.2, 20), 1, 1), metal);
+  arm.rotation.x = Math.PI / 2; arm.position.z = -0.12; consoleGroup.add(arm);
   consoleGroup.position.set(13.2, 0.1, -1.55);
   consoleGroup.rotation.y = 0.35;
   e.station.interior.add(consoleGroup);

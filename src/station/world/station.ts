@@ -339,6 +339,48 @@ export function buildStation(): Station {
   add(hubLight);
   // Real hardware on the hub walls: corner trim, battens with fasteners, ORU
   // panels, cargo bags on velcro, a fire extinguisher, tied cable runs.
+  // Wall hardware shared by the hub and observation room.
+  const oru = (c: THREE.Vector3, n: THREE.Vector3, w: number, h: number, lines: string[], bg: string) => {
+    const g = new THREE.Group();
+    const body = boxPBR(w, h, 0.07, hubFrame);
+    g.add(body);
+    const label = new THREE.Mesh(new THREE.PlaneGeometry(w * 0.82, h * 0.26), new THREE.MeshStandardMaterial({ map: plateTexture(lines, { bg }), roughness: 0.55 }));
+    label.position.set(0, h * 0.27, 0.036);
+    g.add(label);
+    for (const sx of [-1, 1]) {
+      const handle = new THREE.Mesh(new THREE.TorusGeometry(0.05, 0.009, 10, 20, Math.PI), hubRail);
+      handle.position.set(sx * w * 0.3, -h * 0.12, 0.035); handle.rotation.z = Math.PI;
+      g.add(handle);
+    }
+    for (const [x, y] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
+      const sw = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 0.012, 12), hubFrame);
+      sw.rotation.x = Math.PI / 2; sw.position.set(x * (w / 2 - 0.03), y * (h / 2 - 0.03), 0.038);
+      g.add(sw);
+    }
+    const led = new THREE.Mesh(new THREE.CircleGeometry(0.009, 12), hubLed);
+    led.position.set(w * 0.32, h * 0.1, 0.037);
+    g.add(led);
+    g.quaternion.setFromUnitVectors(V(0, 0, 1), n);
+    g.position.copy(c).addScaledVector(n, 0.045);
+    add(g);
+  };
+  const bag = (c: THREE.Vector3, n: THREE.Vector3, w: number, h: number, mat: THREE.Material, tag: string) => {
+    const g = new THREE.Group();
+    const body = new THREE.Mesh(scaleUV(new RoundedBoxGeometry(w, h, 0.17, 5, 0.045), 2, 2), mat);
+    g.add(body);
+    for (const sy of [-0.28, 0.28]) {
+      const strap = new THREE.Mesh(new THREE.BoxGeometry(w + 0.01, 0.028, 0.18), velcroMat);
+      strap.position.y = sy * h; g.add(strap);
+    }
+    const hd = new THREE.Mesh(new THREE.TorusGeometry(0.04, 0.007, 8, 16, Math.PI), velcroMat);
+    hd.position.set(0, h / 2, 0.02); g.add(hd);
+    const tg = new THREE.Mesh(new THREE.PlaneGeometry(w * 0.45, h * 0.2), new THREE.MeshStandardMaterial({ map: plateTexture([tag], { bg: '#f3f3f0', w: 256, h: 96, font: 40 }), roughness: 0.6 }));
+    tg.position.set(0, -h * 0.08, 0.087); g.add(tg);
+    g.quaternion.setFromUnitVectors(V(0, 0, 1), n);
+    g.position.copy(c).addScaledVector(n, 0.085);
+    g.rotateZ((Math.sin(c.y * 7.3 + c.z) * 0.06));
+    add(g);
+  };
   const dressHub = () => {
     const T = 0.07;
     // Corner angle trim along all twelve edges.
@@ -378,51 +420,10 @@ export function buildStation(): Station {
     add(screws);
 
     // ORU panels with labels, handles, fasteners and a status LED.
-    const oru = (c: THREE.Vector3, n: THREE.Vector3, w: number, h: number, lines: string[], bg: string) => {
-      const g = new THREE.Group();
-      const body = boxPBR(w, h, 0.07, hubFrame);
-      g.add(body);
-      const label = new THREE.Mesh(new THREE.PlaneGeometry(w * 0.82, h * 0.26), new THREE.MeshStandardMaterial({ map: plateTexture(lines, { bg }), roughness: 0.55 }));
-      label.position.set(0, h * 0.27, 0.036);
-      g.add(label);
-      for (const sx of [-1, 1]) {
-        const handle = new THREE.Mesh(new THREE.TorusGeometry(0.05, 0.009, 10, 20, Math.PI), hubRail);
-        handle.position.set(sx * w * 0.3, -h * 0.12, 0.035); handle.rotation.z = Math.PI;
-        g.add(handle);
-      }
-      for (const [x, y] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
-        const sw = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 0.012, 12), hubFrame);
-        sw.rotation.x = Math.PI / 2; sw.position.set(x * (w / 2 - 0.03), y * (h / 2 - 0.03), 0.038);
-        g.add(sw);
-      }
-      const led = new THREE.Mesh(new THREE.CircleGeometry(0.009, 12), hubLed);
-      led.position.set(w * 0.32, h * 0.1, 0.037);
-      g.add(led);
-      g.quaternion.setFromUnitVectors(V(0, 0, 1), n);
-      g.position.copy(c).addScaledVector(n, 0.045);
-      add(g);
-    };
     oru(V(-1.95, 0.7, H), V(0, 0, -1), 0.55, 0.8, ['AVIONICS', 'ORU-14A'], '#e9e6de');
     oru(V(1.85, -0.5, H), V(0, 0, -1), 0.5, 0.6, ['PWR DIST', '28 VDC'], '#f2d24b');
 
     // Cargo transfer bags velcroed to the west wall, with straps and handles.
-    const bag = (c: THREE.Vector3, n: THREE.Vector3, w: number, h: number, mat: THREE.Material, tag: string) => {
-      const g = new THREE.Group();
-      const body = new THREE.Mesh(scaleUV(new RoundedBoxGeometry(w, h, 0.17, 5, 0.045), 2, 2), mat);
-      g.add(body);
-      for (const sy of [-0.28, 0.28]) {
-        const strap = new THREE.Mesh(new THREE.BoxGeometry(w + 0.01, 0.028, 0.18), velcroMat);
-        strap.position.y = sy * h; g.add(strap);
-      }
-      const hd = new THREE.Mesh(new THREE.TorusGeometry(0.04, 0.007, 8, 16, Math.PI), velcroMat);
-      hd.position.set(0, h / 2, 0.02); g.add(hd);
-      const tg = new THREE.Mesh(new THREE.PlaneGeometry(w * 0.45, h * 0.2), new THREE.MeshStandardMaterial({ map: plateTexture([tag], { bg: '#f3f3f0', w: 256, h: 96, font: 40 }), roughness: 0.6 }));
-      tg.position.set(0, -h * 0.08, 0.087); g.add(tg);
-      g.quaternion.setFromUnitVectors(V(0, 0, 1), n);
-      g.position.copy(c).addScaledVector(n, 0.085);
-      g.rotateZ((Math.sin(c.y * 7.3 + c.z) * 0.06));
-      add(g);
-    };
     bag(V(-H, -0.4, 1.7), V(1, 0, 0), 0.52, 0.34, hubBag, 'CTB 0412');
     bag(V(-H, -0.85, 1.65), V(1, 0, 0), 0.46, 0.3, hubBagAlt, 'CTB 0417');
     bag(V(-H, 0.45, -1.7), V(1, 0, 0), 0.5, 0.36, hubBagAlt, 'WATER');
@@ -526,56 +527,92 @@ export function buildStation(): Station {
 
   // Observation module (east of research): bigger, with a great round window.
   door('Observation module', 'x', 11.0, 11.8, 0.95);
-  hatch(V(11.2, 0, 0), V(1, 0, 0), 0.95);
+  hatch(V(11.2, 0, 0), V(1, 0, 0), 0.95, true, 1, hubFrame);
   const OS = 2.2;
   space.add(box('Observation module', 'Observation module', [11.6, -OS, -OS], [17.6, OS, OS]));
   {
     const len = 6, cx = 14.6;
-    face(V(cx, OS, 0), V(0, -1, 0), V(1, 0, 0), len, OS * 2);
-    face(V(cx, 0, -OS), V(0, 0, 1), V(1, 0, 0), len, OS * 2);
-    face(V(cx, 0, OS), V(0, 0, -1), V(1, 0, 0), len, OS * 2);
-    face(V(11.6, 0, 0), V(1, 0, 0), V(0, 0, -1), OS * 2, OS * 2, 0.95);
-    // Belly window strip.
-    face(V(cx - 2, -OS, 0), V(0, 1, 0), V(1, 0, 0), 2, OS * 2);
-    face(V(cx + 2.5, -OS, 0), V(0, 1, 0), V(1, 0, 0), 1, OS * 2);
-    for (const z of [-OS + 0.6, OS - 0.6]) face(V(cx + 0.5, -OS, z), V(0, 1, 0), V(1, 0, 0), 3, 1.2);
-    const belly = new THREE.Mesh(new THREE.PlaneGeometry(3, OS * 2 - 2.4), glass);
+    face(V(cx, OS, 0), V(0, -1, 0), V(1, 0, 0), len, OS * 2, undefined, hubWall);
+    face(V(cx, 0, -OS), V(0, 0, 1), V(1, 0, 0), len, OS * 2, undefined, hubWall);
+    face(V(cx, 0, OS), V(0, 0, -1), V(1, 0, 0), len, OS * 2, undefined, hubWall);
+    face(V(11.6, 0, 0), V(1, 0, 0), V(0, 0, -1), OS * 2, OS * 2, 0.95, hubWall);
+    // Floor (nadir side): diamond-plate walkway strips around the belly window.
+    const floorStrip = (x: number, w: number, z: number, d: number) => {
+      const m = new THREE.Mesh(scaleUV(new THREE.PlaneGeometry(w, d), w / 0.8, d / 0.8), hubFloor);
+      m.rotation.x = -Math.PI / 2; m.position.set(x, -OS, z); add(m);
+    };
+    floorStrip(cx - 2, 2, 0, OS * 2); floorStrip(cx + 2.5, 1, 0, OS * 2);
+    for (const z of [-OS + 0.6, OS - 0.6]) floorStrip(cx + 0.5, 3, z, 1.2);
+    const belly = new THREE.Mesh(new THREE.PlaneGeometry(3, OS * 2 - 2.4), hubGlass);
     belly.rotation.x = -Math.PI / 2;
     belly.position.set(cx + 0.5, -OS - 0.02, 0);
     add(belly);
-    // The great window on the end cap.
-    const ring = new THREE.Mesh(new THREE.RingGeometry(1.75, OS * 1.42, 64, 1), wallMat);
+    for (const z of [-1.2, 1.2]) { const f = boxPBR(3.1, 0.05, 0.06, hubFrame); f.position.set(cx + 0.5, -OS + 0.025, z); add(f); }
+    // The great window on the end cap: a thick brushed bezel, a bolt ring, double glazing.
+    const ring = new THREE.Mesh(scaleUV(new THREE.RingGeometry(1.75, OS * 1.42, 96, 1), 6, 6), hubWall);
     ring.rotation.y = -Math.PI / 2;
     ring.position.set(17.6, 0, 0);
     add(ring);
-    const win = new THREE.Mesh(new THREE.CircleGeometry(1.75, 64), glass);
-    win.rotation.y = -Math.PI / 2;
-    win.position.set(17.62, 0, 0);
-    add(win);
-    const bezel = new THREE.Mesh(new THREE.TorusGeometry(1.78, 0.07, 12, 64), frameMat);
-    bezel.rotation.y = Math.PI / 2;
-    bezel.position.set(17.58, 0, 0);
-    add(bezel);
-    for (let i = 0; i < 8; i++) {
-      const b = new THREE.Mesh(new THREE.SphereGeometry(0.035, 8, 8), frameMat);
-      b.position.set(17.55, Math.sin(i / 8 * Math.PI * 2) * 1.88, Math.cos(i / 8 * Math.PI * 2) * 1.88);
-      add(b);
+    for (const dx of [0.02, 0.1]) { // double glazing
+      const pane = new THREE.Mesh(new THREE.CircleGeometry(1.75, 96), hubGlass);
+      pane.rotation.y = -Math.PI / 2;
+      pane.position.set(17.6 + dx, 0, 0);
+      add(pane);
     }
+    const bezel = new THREE.Mesh(scaleUV(new THREE.TorusGeometry(1.8, 0.1, 24, 128), 60, 3), hubFrame);
+    bezel.rotation.y = Math.PI / 2;
+    bezel.position.set(17.57, 0, 0);
+    add(bezel);
+    const lip = new THREE.Mesh(scaleUV(new THREE.CylinderGeometry(1.76, 1.76, 0.22, 96, 1, true), 40, 1), hubFrame);
+    lip.rotation.z = Math.PI / 2; lip.position.set(17.5, 0, 0);
+    lip.material = Object.assign(hubFrame.clone(), { side: THREE.DoubleSide });
+    add(lip);
+    const bolts = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.035, 0.035, 0.03, 12), hubFrame, 32);
+    const bm = new THREE.Matrix4(), bq = new THREE.Quaternion().setFromAxisAngle(V(0, 0, 1), Math.PI / 2);
+    for (let i = 0; i < 32; i++) {
+      const a = (i / 32) * Math.PI * 2;
+      bolts.setMatrixAt(i, bm.compose(V(17.56, Math.sin(a) * 1.98, Math.cos(a) * 1.98), bq, V(1, 1, 1)));
+    }
+    add(bolts);
+    // Ceiling light panels and wall hardware.
     for (const [y, z] of [[OS - 0.25, -OS + 0.25], [OS - 0.25, OS - 0.25]]) {
-      const l = new THREE.Mesh(new THREE.BoxGeometry(len - 0.6, 0.04, 0.14), lightMat);
+      const l = new THREE.Mesh(new THREE.BoxGeometry(len - 0.6, 0.04, 0.14), hubLamp);
       l.position.set(cx, y, z);
       add(l);
     }
-    const light = new THREE.PointLight(0xe8e0ff, 4, 14, 2);
+    const light = new THREE.PointLight(0xe8e0ff, 2.6, 14, 2);
     light.position.set(cx - 1, OS * 0.6, 0);
     add(light);
     for (const z of [-OS + 0.1, OS - 0.1]) {
       const a = V(12.1, 0.9, z), b = V(17.1, 0.9, z);
       rails.push({ a, b });
-      const rod = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.022, 5, 10), railMat);
+      const rod = new THREE.Mesh(scaleUV(new THREE.CylinderGeometry(0.022, 0.022, 5, 24), 1, 15), hubRail);
       rod.rotation.z = Math.PI / 2;
       rod.position.set(14.6, 0.9, z);
       add(rod);
+      const gp = new THREE.Mesh(scaleUV(new THREE.CylinderGeometry(0.026, 0.026, 1.5, 24), 2, 1), hubGrip);
+      gp.rotation.z = Math.PI / 2; gp.position.set(14.6, 0.9, z); add(gp);
+      for (const x of [12.4, 14.6, 16.8]) {
+        const st = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, 0.1, 16), hubFrame);
+        st.rotation.x = Math.PI / 2; st.position.set(x, 0.9, z + (z < 0 ? -0.05 : 0.05)); add(st);
+      }
+    }
+    // Panels, bags and cable runs on the side walls (clear of the telescope, the console and the hatch).
+    oru(V(12.9, 1.0, -OS), V(0, 0, 1), 0.55, 0.7, ['STAR TRACKER', 'ST-2 · NOMINAL'], '#e9e6de');
+    oru(V(16.2, 1.0, -OS), V(0, 0, 1), 0.5, 0.6, ['THERMAL', 'LOOP B'], '#f2d24b');
+    oru(V(12.9, -0.9, OS), V(0, 0, -1), 0.6, 0.6, ['OPTICS', 'PWR 28V'], '#e9e6de');
+    bag(V(16.0, 0.3, OS), V(0, 0, -1), 0.5, 0.34, hubBagAlt, 'EYEPIECES');
+    bag(V(16.0, -0.2, OS), V(0, 0, -1), 0.46, 0.3, hubBag, 'FILTERS');
+    const cables: THREE.Vector3[][] = [];
+    for (let j = 0; j < 4; j++) {
+      const pts = [];
+      for (let i = 0; i <= 14; i++) pts.push(V(12 + 5 * (i / 14), OS - 0.14 - (j % 2) * 0.022 + Math.sin(i * 0.8 + j) * 0.006, -OS + 0.12 + Math.floor(j / 2) * 0.022));
+      cables.push(pts);
+    }
+    cables.forEach((pts, j) => add(new THREE.Mesh(scaleUV(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 60, 0.011, 10, false), 18, 1), rubberCables[j % rubberCables.length])));
+    for (let i = 1; i < 14; i += 2) {
+      const tie = new THREE.Mesh(new THREE.TorusGeometry(0.034, 0.0035, 6, 14), new THREE.MeshStandardMaterial({ color: 0xe8e8e0, roughness: 0.55 }));
+      tie.position.set(12 + 5 * (i / 14), OS - 0.145, -OS + 0.13); tie.rotation.y = Math.PI / 2; add(tie);
     }
   }
 

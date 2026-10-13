@@ -7,7 +7,7 @@ export function interiorEnvironment() {
   const scene = new THREE.Scene();
   const room = new THREE.Mesh(
     new THREE.BoxGeometry(14, 6, 6),
-    new THREE.MeshBasicMaterial({ color: 0x2c2f37, side: THREE.BackSide }),
+    new THREE.MeshBasicMaterial({ color: 0xc4c2bd, side: THREE.BackSide }),
   );
   scene.add(room);
   const panel = (w: number, h: number, c: number, k: number, pos: [number, number, number], rot: [number, number, number]) => {
