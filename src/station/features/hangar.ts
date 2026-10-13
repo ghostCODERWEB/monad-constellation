@@ -6,6 +6,8 @@ import * as THREE from 'three';
 import type { Engine } from '../engine';
 import { buildShuttle } from '@/components/shuttle';
 import { labelTexture } from '../world/textures';
+import { pbrSet, recolouredPaint, scaleUV } from '../world/pbr';
+import { shuttleMaterials } from '../world/shuttlePbr';
 import { addPanelMode, hotkey } from './panel';
 
 const LENGTH = 10.5;
@@ -20,9 +22,48 @@ function arrival() {
   return arrivalOnce;
 }
 
+/** Hardware that a texture can't carry: RCS thrusters, the dorsal handrail, a docking probe, blade antennas. Units are the shuttle's local ones. */
+function addShipHardware(g: THREE.Group) {
+  const bronze = new THREE.MeshPhysicalMaterial({ color: 0x6b4a2a, metalness: 1, roughness: 0.4 });
+  const dark = new THREE.MeshStandardMaterial({ color: 0x0c0c10, roughness: 0.7, metalness: 0.4 });
+  const gold = pbrSet('brushed-aluminium', { color: 0xe3b94a, normal: 0.6, roughness: 0.85 });
+  const alu = pbrSet('brushed-aluminium', { color: 0xdfe3e8, normal: 0.6, roughness: 0.7 });
+  const R = 0.19;
+  // Reaction-control thrusters in clusters of four around the nose and mid-body.
+  for (const [z, r] of [[-0.84, 0.12], [-0.55, 0.155], [0.28, 0.185]] as const) {
+    for (let i = 0; i < 4; i++) {
+      const a = (i / 4) * Math.PI * 2 + Math.PI / 4;
+      const x = Math.sin(a) * r, y = Math.cos(a) * r * 0.72;
+      const nz = new THREE.Mesh(new THREE.ConeGeometry(0.012, 0.03, 16, 1, true), bronze);
+      nz.position.set(x, y, z);
+      nz.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), new THREE.Vector3(Math.sin(a), Math.cos(a), 0).normalize());
+      nz.material = Object.assign((bronze as THREE.MeshPhysicalMaterial).clone(), { side: THREE.DoubleSide });
+      g.add(nz);
+      const hole = new THREE.Mesh(new THREE.CircleGeometry(0.0095, 16), dark);
+      hole.position.set(x * 1.12, y * 1.12, z); hole.lookAt(x * 3, y * 3, z); g.add(hole);
+    }
+  }
+  // Dorsal handrail along the livery stripe.
+  const bar = new THREE.Mesh(new THREE.CylinderGeometry(0.004, 0.004, 0.34, 12), gold);
+  bar.rotation.x = Math.PI / 2; bar.position.set(0, R * 0.72 + 0.034, 0.15); g.add(bar);
+  for (const z of [-0.01, 0.15, 0.31]) {
+    const post = new THREE.Mesh(new THREE.CylinderGeometry(0.003, 0.003, 0.03, 8), alu);
+    post.position.set(0, R * 0.72 + 0.016, z); g.add(post);
+  }
+  // Docking probe on the nose, and two blade antennas.
+  const probe = new THREE.Mesh(new THREE.CylinderGeometry(0.003, 0.012, 0.16, 16), alu);
+  probe.rotation.x = Math.PI / 2; probe.position.set(0, 0, -1.12); g.add(probe);
+  const probeTip = new THREE.Mesh(new THREE.SphereGeometry(0.008, 12, 10), bronze);
+  probeTip.position.set(0, 0, -1.2); g.add(probeTip);
+  for (const [z, up] of [[0.0, 1], [0.4, -1]] as const) {
+    const blade = new THREE.Mesh(new THREE.BoxGeometry(0.004, 0.05, 0.05), alu);
+    blade.position.set(0.05, up * (R * 0.72 + 0.02), z); blade.rotation.z = up * 0.1; g.add(blade);
+  }
+}
+
 export function installHangar(e: Engine) {
   const dock = e.station.anchors.shuttleDock;
-  const ship = buildShuttle();
+  const ship = buildShuttle(shuttleMaterials());
   const box = new THREE.Box3().setFromObject(ship.group);
   const size = box.getSize(new THREE.Vector3());
   const k = LENGTH / Math.max(size.z, 0.001);
@@ -30,18 +71,45 @@ export function installHangar(e: Engine) {
   ship.group.position.copy(dock).add(new THREE.Vector3(0, -0.8, 0));
   // Parked broadside to the gallery, so its whole length fills the windows.
   ship.group.rotation.y = -Math.PI / 2;
+  addShipHardware(ship.group);
   ship.light.intensity = 6; ship.light.distance = 6; ship.light.decay = 2;
   for (const p of ship.plumes) p.scale.z = 0.001;
   e.station.interior.add(ship.group);
 
   // Docking cradle under the hull and a destination board on the wall.
-  const cradle = new THREE.Mesh(new THREE.BoxGeometry(6, 0.25, 3.2), new THREE.MeshStandardMaterial({ color: 0x3a3f4a, metalness: 0.7, roughness: 0.4 }));
+  const steel = pbrSet('brushed-aluminium', { color: 0xaab0ba, normal: 0.8, roughness: 0.85 });
+  const plate = pbrSet('diamond-plate', { color: 0x9aa0aa, normal: 0.9 });
+  const yellow = pbrSet('painted-metal', { albedo: recolouredPaint(0xe9b60f), normal: 0.8, roughness: 0.9, clearcoat: 0.5, clearcoatRoughness: 0.3 });
+  const rubber = pbrSet('rubber', { color: 0x1b1d21, normal: 1.4 });
+  const cradle = new THREE.Mesh(scaleUV(new THREE.BoxGeometry(6, 0.25, 3.2), 3, 2), plate);
   cradle.position.set(dock.x, -3.85, dock.z);
   e.station.interior.add(cradle);
   for (const x of [-2, 2]) for (const z of [-1, 1]) {
-    const strut = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.08, 2.1, 10), new THREE.MeshStandardMaterial({ color: 0xfacc15, metalness: 0.5, roughness: 0.5 }));
+    const strut = new THREE.Mesh(scaleUV(new THREE.CylinderGeometry(0.06, 0.08, 2.1, 24), 2, 3), yellow);
     strut.position.set(dock.x + x, -2.75, dock.z + z);
     e.station.interior.add(strut);
+    const pad = new THREE.Mesh(scaleUV(new THREE.CylinderGeometry(0.2, 0.2, 0.08, 32), 2, 1), rubber); // rubber hull pad
+    pad.position.set(dock.x + x, -1.66, dock.z + z);
+    e.station.interior.add(pad);
+    const foot = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.26, 0.05, 32), steel);
+    foot.position.set(dock.x + x, -3.68, dock.z + z);
+    e.station.interior.add(foot);
+  }
+  // Fuel and power umbilicals: rubber hoses from a wall port to the hull, wheel chocks on the deck.
+  const hose = (from: THREE.Vector3, to: THREE.Vector3, color: number) => {
+    const mid = from.clone().lerp(to, 0.5); mid.y -= 0.8;
+    const m = pbrSet('rubber', { color, normal: 1.5 });
+    e.station.interior.add(new THREE.Mesh(scaleUV(new THREE.TubeGeometry(new THREE.CatmullRomCurve3([from, mid, to]), 48, 0.06, 12, false), 24, 1), m));
+    for (const t of [0.0, 1.0]) {
+      const c = new THREE.Mesh(new THREE.CylinderGeometry(0.085, 0.085, 0.14, 24), steel);
+      c.position.copy(t ? to : from); e.station.interior.add(c);
+    }
+  };
+  hose(new THREE.Vector3(-5.85, -1.2, dock.z + 1.4), new THREE.Vector3(dock.x - 1.2, dock.y - 1.4, dock.z + 0.9), 0x1f2937);
+  hose(new THREE.Vector3(-5.85, -2.0, dock.z - 1.2), new THREE.Vector3(dock.x + 1.8, dock.y - 1.3, dock.z - 0.9), 0x7c2d12);
+  for (const x of [-2.4, 2.4]) {
+    const chock = new THREE.Mesh(scaleUV(new THREE.BoxGeometry(0.22, 0.2, 0.5), 1, 1), yellow);
+    chock.position.set(dock.x + x, -3.65, dock.z + 2.0); e.station.interior.add(chock);
   }
   const board = new THREE.Mesh(new THREE.PlaneGeometry(3.6, 1), new THREE.MeshBasicMaterial({ map: labelTexture(['SHUTTLE · MONAD CONSTELLATION RUN', 'BOARD AT THE HATCH OR PRESS B'], { bg: '#0b0618', fg: '#c4b5fd', w: 1024, h: 284, font: 46, border: '#836ef9' }) }));
   board.position.set(-5.9, 1.6, -15);

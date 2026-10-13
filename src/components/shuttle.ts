@@ -48,16 +48,24 @@ function glowTexture(inner: string, outer: string) {
   return new THREE.CanvasTexture(c);
 }
 
-export function buildShuttle(): Shuttle {
+/** Optional surface overrides: the station hangar supplies full PBR sets; the galaxy uses the built-in look. */
+export interface ShuttleMaterials {
+  paint?: THREE.Material; wing?: THREE.Material; violet?: THREE.Material; nacelle?: THREE.Material;
+  bell?: THREE.Material; chrome?: THREE.Material; canopy?: THREE.Material;
+}
+
+export function buildShuttle(over: ShuttleMaterials = {}): Shuttle {
   const group = new THREE.Group();
 
-  const paint = new THREE.MeshPhysicalMaterial({
+  const paintDefault = new THREE.MeshPhysicalMaterial({
     map: hullTexture(), metalness: 0.45, roughness: 0.4, clearcoat: 0.6, clearcoatRoughness: 0.2, color: 0x9a93b8,
     emissive: 0x150d36, emissiveIntensity: 0.08,
   });
-  const violet = new THREE.MeshPhysicalMaterial({ color: 0x6d5bd0, metalness: 0.8, roughness: 0.25, clearcoat: 1, emissive: 0x3b2a8c, emissiveIntensity: 0.15 });
-  const gunmetal = new THREE.MeshPhysicalMaterial({ color: 0x24203a, metalness: 0.9, roughness: 0.35, clearcoat: 0.6 });
-  const chrome = new THREE.MeshPhysicalMaterial({ color: 0xd8d4ec, metalness: 1, roughness: 0.12 });
+  const violetDefault = new THREE.MeshPhysicalMaterial({ color: 0x6d5bd0, metalness: 0.8, roughness: 0.25, clearcoat: 1, emissive: 0x3b2a8c, emissiveIntensity: 0.15 });
+  const gunmetalDefault = new THREE.MeshPhysicalMaterial({ color: 0x24203a, metalness: 0.9, roughness: 0.35, clearcoat: 0.6 });
+  const chromeDefault = new THREE.MeshPhysicalMaterial({ color: 0xd8d4ec, metalness: 1, roughness: 0.12 });
+  const paint = over.paint ?? paintDefault, violet = over.violet ?? violetDefault, gunmetal = over.nacelle ?? gunmetalDefault, chrome = over.chrome ?? chromeDefault;
+  const wingMat = over.wing ?? paint, bellMat = over.bell ?? chrome;
 
   // Fuselage: a lathe profile, needle nose to a broad engine block.
   const profile: THREE.Vector2[] = [];
@@ -73,7 +81,7 @@ export function buildShuttle(): Shuttle {
   group.add(body);
 
   // Canopy: tinted glass bubble with a chrome frame.
-  const canopy = new THREE.Mesh(new THREE.SphereGeometry(0.11, 24, 16, 0, Math.PI * 2, 0, Math.PI / 2), new THREE.MeshPhysicalMaterial({
+  const canopy = new THREE.Mesh(new THREE.SphereGeometry(0.11, 24, 16, 0, Math.PI * 2, 0, Math.PI / 2), over.canopy ?? new THREE.MeshPhysicalMaterial({
     color: 0x0b1a3a, metalness: 0.1, roughness: 0.02, clearcoat: 1, emissive: 0x22d3ee, emissiveIntensity: 0.35, transparent: true, opacity: 0.92,
   }));
   canopy.scale.set(0.95, 0.75, 2.6);
@@ -102,7 +110,7 @@ export function buildShuttle(): Shuttle {
 
   const blinkers: Shuttle['blinkers'] = [];
   for (const side of [1, -1]) {
-    const w = new THREE.Mesh(wingGeo, paint);
+    const w = new THREE.Mesh(wingGeo, wingMat);
     w.scale.x = side;
     w.position.set(0, -0.045, 0.02);
     w.rotation.z = side * -0.06; // a touch of anhedral
@@ -159,7 +167,7 @@ export function buildShuttle(): Shuttle {
     const intake = new THREE.Mesh(new THREE.TorusGeometry(0.085, 0.012, 8, 24), chrome);
     intake.position.set(x, -0.03, 0.17);
     group.add(intake);
-    const bell = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.075, 0.1, 20, 1, true), chrome);
+    const bell = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.075, 0.1, 20, 1, true), bellMat);
     bell.rotation.x = Math.PI / 2;
     bell.position.set(x, -0.03, 0.71);
     group.add(bell);

@@ -9,7 +9,7 @@ import * as THREE from 'three';
 import { Space, box, cyl } from '../core/space';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 import { labelTexture, panelBump, panelTexture, patchTexture, rackTexture, type RackKind } from './textures';
-import { RACK_MODULES, blanketMaterial, glassSmudge, lightDiffuser, pbrSet, plateTexture, rackModule, scaleUV, tileUV } from './pbr';
+import { RACK_MODULES, blanketMaterial, glassSmudge, lightDiffuser, pbrSet, plateTexture, rackModule, recolouredPaint, scaleUV, tileUV } from './pbr';
 import { buildWorkstation } from './workstation';
 
 export interface Rail { a: THREE.Vector3; b: THREE.Vector3 }
@@ -673,29 +673,43 @@ export function buildStation(): Station {
   door('Hangar', 'z', -5.6, -4.8, 0.95);
   {
     // A glass walkway: the shuttle is on show from the moment you leave mission control.
-    const shell = new THREE.Mesh(new THREE.CylinderGeometry(1.17, 1.17, 2.4, 32, 1, true), glass);
+    const shell = new THREE.Mesh(new THREE.CylinderGeometry(1.17, 1.17, 2.4, 48, 1, true), hubGlass);
     shell.rotation.x = Math.PI / 2;
     shell.position.set(0, 0, -4.0);
     add(shell);
     for (const z of [-2.55, -3.2, -4.0, -4.8, -5.1]) {
-      const rib = new THREE.Mesh(new THREE.TorusGeometry(1.17, 0.035, 8, 40), frameMat);
+      const rib = new THREE.Mesh(scaleUV(new THREE.TorusGeometry(1.17, 0.045, 16, 64), 40, 2), hubFrame);
       rib.position.set(0, 0, z);
       add(rib);
     }
-    const floor = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.04, 2.4), frameMat);
+    // Longitudinal stringers between the ribs.
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * Math.PI * 2;
+      const st = boxPBR(0.04, 0.04, 2.6, hubFrame);
+      st.position.set(Math.sin(a) * 1.17, Math.cos(a) * 1.17, -3.85); st.rotation.z = -a; add(st);
+    }
+    const floor = new THREE.Mesh(scaleUV(new THREE.BoxGeometry(0.9, 0.04, 2.4), 1, 3), hubFloor);
     floor.position.set(0, -1.05, -4.0);
     add(floor);
     for (const x of [-0.9, 0.9]) {
       const a = V(x, 0.4, -2.9), b = V(x, 0.4, -5.1);
       rails.push({ a, b });
+      const rod = new THREE.Mesh(scaleUV(new THREE.CylinderGeometry(0.022, 0.022, 2.2, 24), 1, 6), hubRail);
+      rod.rotation.x = Math.PI / 2; rod.position.set(x, 0.4, -4.0); add(rod);
     }
   }
   const HG = { x: 6, y: 4, z0: -22, z1: -5.2 };
   space.add(box('Hangar', 'Hangar', [-HG.x, -HG.y, HG.z0], [HG.x, HG.y, HG.z1]));
-  const hangarMat = new THREE.MeshStandardMaterial({ map: panelTexture([6, 3]), bumpMap: panelBump([6, 3]), bumpScale: 0.6, roughness: 0.5, metalness: 0.35, color: 0xb9b7b2 });
+  // Hangar bay: chipped industrial paint on the walls, a painted deck, structural ribs and caged work lights.
+  const hangarMat = pbrSet('brushed-aluminium', { color: 0xe4e7ec, normal: 0.6, roughness: 0.95 });
+  hangarMat.metalness = 0.6; hangarMat.userData.tile = 1.2;
+  const deckMat = pbrSet('hangar-floor', { color: 0x9aa0a8, normal: 1.2, roughness: 0.9 });
+  deckMat.userData.tile = 3;
+  const lineYellow = pbrSet('painted-metal', { albedo: recolouredPaint(0xf2c200), normal: 0.6, roughness: 0.9 });
+  lineYellow.metalness = 0.05;
   {
     const len = HG.z1 - HG.z0, cz = (HG.z0 + HG.z1) / 2;
-    face(V(0, -HG.y, cz), V(0, 1, 0), V(1, 0, 0), HG.x * 2, len, undefined, hangarMat);
+    face(V(0, -HG.y, cz), V(0, 1, 0), V(1, 0, 0), HG.x * 2, len, undefined, deckMat);
     face(V(0, HG.y, cz), V(0, -1, 0), V(1, 0, 0), HG.x * 2, len, undefined, hangarMat);
     face(V(-HG.x, 0, cz), V(1, 0, 0), V(0, 0, 1), len, HG.y * 2, undefined, hangarMat);
     face(V(HG.x, 0, cz), V(-1, 0, 0), V(0, 0, -1), len, HG.y * 2, undefined, hangarMat);
@@ -703,48 +717,60 @@ export function buildStation(): Station {
     windowFace(V(0, 0, HG.z1), V(0, 0, -1), V(-1, 0, 0), HG.x * 2, HG.y * 2, [
       { r: [-0.95, -0.95, 0.95, 0.95], open: true },
       { r: [-5.2, -2.6, -1.4, 2.9] }, { r: [1.4, -2.6, 5.2, 2.9] }, { r: [-1.4, 1.4, 1.4, 2.9] },
-    ], hangarMat);
-    // Floor markings and docking lights.
-    for (let z = HG.z0 + 1; z < HG.z1 - 0.5; z += 2) {
-      const m = new THREE.Mesh(new THREE.PlaneGeometry(0.4, 1), new THREE.MeshStandardMaterial({ color: 0xfacc15, emissive: 0x806600, emissiveIntensity: 0.4 }));
-      m.rotation.x = -Math.PI / 2;
-      m.position.set(0, -HG.y + 0.01, z);
-      add(m);
+    ], hangarMat, hubGlass, hubFrame);
+    // Structural ribs every 3 m: wall posts, ceiling beams, floor kick-rails.
+    for (let z = HG.z0 + 1.5; z < HG.z1 - 0.4; z += 3) {
+      for (const sx of [-1, 1]) { const p = boxPBR(0.12, HG.y * 2, 0.24, hubFrame, 0.6); p.position.set(sx * (HG.x - 0.06), 0, z); add(p); }
+      const beam = boxPBR(HG.x * 2, 0.26, 0.24, hubFrame, 0.6); beam.position.set(0, HG.y - 0.13, z); add(beam);
     }
-    for (const x of [-HG.x + 0.05, HG.x - 0.05]) for (let z = HG.z0 + 2; z < HG.z1; z += 3) {
-      const l = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.3, 0.6), lightMat);
-      l.position.set(x, HG.y - 0.4, z);
-      add(l);
+    // Hazard-striped kick plates along both walls, and floor lane markings in painted yellow.
+    for (const sx of [-1, 1]) {
+      const kp = new THREE.Mesh(new THREE.PlaneGeometry(len, 0.35), new THREE.MeshStandardMaterial({ map: labelTexture(['◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤'], { bg: '#facc15', fg: '#111', w: 2048, h: 40, font: 32 }), roughness: 0.6 }));
+      kp.rotation.y = sx > 0 ? -Math.PI / 2 : Math.PI / 2; kp.position.set(sx * (HG.x - 0.02), -HG.y + 0.3, cz); add(kp);
     }
-    const sign = plane(3.4, 0.5, new THREE.MeshStandardMaterial({ map: labelTexture(['PLEASE SECURE ALL BELONGINGS, INCLUDING YOUR EXPECTATIONS'], { bg: '#1f2937', fg: '#facc15', w: 1024, h: 150, font: 30 }) }));
+    for (const lx of [-2.1, 2.1]) { const m = new THREE.Mesh(new THREE.PlaneGeometry(0.16, len - 1), lineYellow); m.rotation.x = -Math.PI / 2; m.position.set(lx, -HG.y + 0.012, cz); add(m); }
+    for (let z = HG.z0 + 1; z < HG.z1 - 0.5; z += 2) { const m = new THREE.Mesh(new THREE.PlaneGeometry(0.4, 1), lineYellow); m.rotation.x = -Math.PI / 2; m.position.set(0, -HG.y + 0.012, z); add(m); }
+    const decal = new THREE.Mesh(new THREE.PlaneGeometry(6, 1.5), new THREE.MeshStandardMaterial({ map: plateTexture(['SHUTTLE BAY 01'], { bg: '#232733', fg: '#facc15', w: 2048, h: 512, font: 200 }), roughness: 0.7, transparent: true }));
+    decal.rotation.x = -Math.PI / 2; decal.position.set(0, -HG.y + 0.015, HG.z1 - 3.2); add(decal);
+    // Caged work lights along both walls: housing, cage bars and a diffuser.
+    for (const x of [-HG.x + 0.3, HG.x - 0.3]) for (let z = HG.z0 + 2; z < HG.z1; z += 3) {
+      const housing = boxPBR(0.3, 0.4, 0.7, hubFrame, 0.4); housing.position.set(x, HG.y - 0.7, z); add(housing);
+      const lens = new THREE.Mesh(new THREE.PlaneGeometry(0.24, 0.6), hubLamp); lens.rotation.x = Math.PI / 2; lens.position.set(x, HG.y - 0.905, z); add(lens);
+      for (let k = -2; k <= 2; k++) { const bar = boxPBR(0.01, 0.015, 0.7, hubFrame, 0.3); bar.position.set(x + k * 0.055, HG.y - 0.92, z); add(bar); }
+    }
+    const sign = plane(3.4, 0.5, new THREE.MeshStandardMaterial({ map: labelTexture(['PLEASE SECURE ALL BELONGINGS, INCLUDING YOUR EXPECTATIONS'], { bg: '#1f2937', fg: '#facc15', w: 1024, h: 150, font: 30 }), roughness: 0.5 }));
     sign.position.set(0, 3.4, HG.z1 - 0.05);
     sign.rotation.y = Math.PI;
     add(sign);
     for (const [x, y] of [[-3, 2.5], [3, 2.5]]) {
-      const l = new THREE.PointLight(0xe0e8ff, 14, 26, 2);
+      const l = new THREE.PointLight(0xe0e8ff, 10, 26, 2);
       l.position.set(x, y, cz);
       add(l);
     }
     for (const x of [-HG.x + 0.12, HG.x - 0.12]) {
       const a = V(x, 1.5, HG.z1 - 0.6), b = V(x, 1.5, HG.z0 + 1.5);
       rails.push({ a, b });
-      const rod = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, a.distanceTo(b), 10), railMat);
+      const L = a.distanceTo(b);
+      const rod = new THREE.Mesh(scaleUV(new THREE.CylinderGeometry(0.025, 0.025, L, 24), 1, L * 3), hubRail);
       rod.rotation.x = Math.PI / 2;
       rod.position.copy(a).add(b).multiplyScalar(0.5);
       add(rod);
+      for (let t = 0; t <= 1.001; t += 0.125) { const post = new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.018, 0.12, 12), hubFrame); post.rotation.z = Math.PI / 2; post.position.copy(a).lerp(b, t).add(V(-Math.sign(x) * 0.0, 0, 0)); post.position.x += (x < 0 ? -0.06 : 0.06) * -1; add(post); }
     }
   }
-  // Hangar doors at the far end: two leaves that slide apart.
-  const doorMat = new THREE.MeshStandardMaterial({ map: rackTexture('grille', 42), color: 0xd8d6d0, roughness: 0.5, metalness: 0.5 });
-  const hangarLeft = new THREE.Mesh(new THREE.BoxGeometry(HG.x, HG.y * 2, 0.2), doorMat);
+  // Hangar doors at the far end: two leaves that slide apart, ribbed and chipped like the walls.
+  const doorMat = pbrSet('brushed-aluminium', { color: 0xc4c9d2, normal: 0.7, roughness: 0.95 });
+  doorMat.metalness = 0.6; doorMat.userData.tile = 1.2;
+  const hangarLeft = boxPBR(HG.x, HG.y * 2, 0.2, doorMat, 1.2);
   hangarLeft.position.set(-HG.x / 2, 0, HG.z0);
-  const hangarRight = hangarLeft.clone();
+  const hangarRight = boxPBR(HG.x, HG.y * 2, 0.2, doorMat, 1.2);
   hangarRight.position.set(HG.x / 2, 0, HG.z0);
   add(hangarLeft); add(hangarRight);
   for (const d of [hangarLeft, hangarRight]) {
-    const stripe = new THREE.Mesh(new THREE.PlaneGeometry(HG.x - 0.4, 0.3), new THREE.MeshStandardMaterial({ map: labelTexture(['◢◤◢◤◢◤◢◤◢◤◢◤'], { bg: '#facc15', fg: '#111', w: 512, h: 48, font: 30 }) }));
+    const stripe = new THREE.Mesh(new THREE.PlaneGeometry(HG.x - 0.4, 0.3), new THREE.MeshStandardMaterial({ map: labelTexture(['◢◤◢◤◢◤◢◤◢◤◢◤'], { bg: '#facc15', fg: '#111', w: 512, h: 48, font: 30 }), roughness: 0.6 }));
     stripe.position.set(0, -HG.y + 0.5, 0.11);
     d.add(stripe);
+    for (let y = -HG.y + 1.5; y < HG.y; y += 2.2) { const rib = boxPBR(HG.x - 0.3, 0.12, 0.08, hubFrame, 0.5); rib.position.set(0, y, 0.14); d.add(rib); }
   }
 
   // ---------- mission patches ----------
