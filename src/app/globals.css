@@ -337,3 +337,31 @@ kbd {
 @media (prefers-reduced-motion: reduce) { .feed li { animation: none; } }
 .sources { bottom: 10px !important; }
 @media (max-width: 1100px) { .timeline { width: calc(100vw - 36px); bottom: 84px; } .heartbeat span { display: none; } .legend { display: none; } }
+
+/* --- reputation ------------------------------------------------------------ */
+.regbtn {
+  position: absolute; right: 18px; bottom: 82px; z-index: 5; display: grid; text-align: right; gap: 1px;
+  padding: 9px 14px; border-radius: 14px; background: var(--glass); border: 1px solid rgba(245, 197, 66, 0.4);
+  backdrop-filter: blur(12px); font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 13px; color: var(--gold);
+}
+.regbtn span { font-family: Inter, sans-serif; font-weight: 400; font-size: 11px; color: var(--muted); }
+.regbtn[aria-pressed='true'] { border-color: var(--gold); box-shadow: 0 0 18px rgba(245, 197, 66, 0.35); }
+.rep { margin: 14px 0 6px; padding: 12px 14px; border-radius: 16px; border: 1px solid; background: rgba(255, 255, 255, 0.03); }
+.rep-head { display: flex; gap: 14px; align-items: center; }
+.dial { position: relative; width: 72px; height: 72px; display: grid; place-items: center; flex: none; }
+.dial svg { position: absolute; inset: 0; }
+.dial .track { fill: none; stroke: rgba(160, 140, 255, 0.15); stroke-width: 6; }
+.dial b { font-family: 'Space Grotesk', sans-serif; font-size: 20px; }
+.tier { display: block; font-family: 'Space Grotesk', sans-serif; font-size: 22px; }
+.parts { list-style: none; margin: 10px 0 6px; padding: 0; font-size: 12px; }
+.parts li { display: grid; grid-template-columns: 1.4fr 1fr auto; gap: 8px; align-items: center; padding: 3px 0; }
+.parts small { color: var(--muted); font-size: 10px; }
+.parts b { min-width: 40px; text-align: right; font-variant-numeric: tabular-nums; }
+.rep .chain { margin-top: 8px; font-size: 11px; color: var(--muted); line-height: 1.45; }
+.rep .chain b { color: var(--ink); }
+.lede-sm { font-size: 13px; color: var(--muted); line-height: 1.5; margin: 0 0 6px; }
+.lede-sm b { color: var(--ink); }
+.reg-stats { grid-template-columns: 1fr 1fr 1fr; }
+.code { margin: 0; padding: 10px 12px; border-radius: 12px; background: rgba(0, 0, 0, 0.35); border: 1px solid var(--line); font-size: 11px; line-height: 1.5; color: #c4b5fd; white-space: pre-wrap; }
+@media (max-width: 1100px) { .regbtn { bottom: 150px; } }
+@media (max-width: 1100px) { .dossier { bottom: 150px; } }

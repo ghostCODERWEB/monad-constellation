@@ -7,7 +7,8 @@ import type { TokenProfile, WalletProfile } from '@/lib/profile';
 import type { ClusterReport } from '@/lib/clusters';
 import type { Timeline, TradeEvent } from '@/lib/timeline';
 import { money } from '@/components/Dossier';
-import { PlanetView, StarView } from '@/components/Dossier';
+import { PlanetView, RegistryPanel, ReputationCard, StarView, type OnChain } from '@/components/Dossier';
+import type { ReputationSet } from '@/lib/repFlags';
 import { KIND, type FlightHud, type Focus, type GalaxyHandle, type ReplayState, type Tie } from '@/components/GalaxyScene';
 
 const GalaxyScene = dynamic(() => import('@/components/GalaxyScene'), { ssr: false });
@@ -30,6 +31,9 @@ export default function Page() {
   const [feed, setFeed] = useState<(TradeEvent & { id: number; n: number })[]>([]);
   const [block, setBlock] = useState<number | null>(null);
   const feedId = useRef(0);
+  const [repSet, setRepSet] = useState<ReputationSet | null>(null);
+  const [registryOpen, setRegistryOpen] = useState(false);
+  const [chain, setChain] = useState<Record<string, OnChain | null | undefined>>({});
   const scene = useRef<GalaxyHandle>(null);
   // Deep dossiers, keyed by address. undefined = loading, null = failed.
   const [wallets, setWallets] = useState<Record<string, WalletProfile | null | undefined>>({});
@@ -44,12 +48,14 @@ export default function Page() {
       // Tracing first funders is slower than the galaxy, so it follows it.
       fetch('/api/clusters').then((r) => r.ok ? r.json() : null).then((c) => c && setReport(c)).catch(() => {});
       fetch('/api/timeline').then((r) => r.ok ? r.json() : null).then((t) => t && setTimeline(t)).catch(() => {});
+      fetch('/api/reputation').then((r) => r.ok ? r.json() : null).then((x) => x && setRepSet(x)).catch(() => {});
     }).catch((e) => setError(e.message));
   }, []);
 
   // Selecting flies to it; closing a dossier leaves the camera where it is.
   const select = useCallback((f: Focus) => {
     setSelected(f);
+    if (f) setRegistryOpen(false);
     if (f) scene.current?.flyTo(f);
   }, []);
   const home = useCallback(() => { setSelected(null); scene.current?.flyTo(null); }, []);
@@ -137,6 +143,15 @@ export default function Page() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selAddr]);
 
+  const repOf = useMemo(() => new Map((repSet?.wallets ?? []).map((w, i) => [w.star, { w, rank: i + 1 }])), [repSet]);
+  // What Monad itself holds for the selected wallet.
+  useEffect(() => {
+    if (selected?.type !== 'star' || !selAddr || selAddr in chain) return;
+    setChain((c) => ({ ...c, [selAddr]: undefined }));
+    fetch(`/api/onchain/${selAddr}`).then((r) => r.json()).then((j) => setChain((c) => ({ ...c, [selAddr]: j }))).catch(() => setChain((c) => ({ ...c, [selAddr]: null })));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selAddr]);
+
   // Lines in the galaxy from the selected wallet to the wallets it deals with,
   // and to the rest of any insider cluster it belongs to.
   const ties = useMemo<Tie[]>(() => {
@@ -207,13 +222,21 @@ export default function Page() {
             )}
           </div>
 
-          {shown && (
+          {registryOpen && repSet && !flying && (
+            <aside className="dossier">
+              <RegistryPanel set={repSet} galaxy={galaxy} onStar={(i) => select({ type: 'star', index: i })} />
+              <button className="close" onClick={() => setRegistryOpen(false)} aria-label="Close the registry">✕</button>
+            </aside>
+          )}
+          {shown && !registryOpen && (
             <aside className="dossier" key={`${shown.type}${shown.index}`}>
               {shown.type === 'planet'
                 ? <PlanetView p={galaxy.planets[shown.index]} galaxy={galaxy} token={tokens[galaxy.planets[shown.index].address]} clusters={report?.clusters ?? []} onStar={(i) => select({ type: 'star', index: i })} />
                 : <StarView s={galaxy.stars[shown.index]} galaxy={galaxy} wallet={wallets[galaxy.stars[shown.index].address]}
                     deep={!!selected && selected.type === 'star' && selected.index === shown.index}
                     starIndex={starIndex} planetIndex={planetIndex} clusters={report?.clusters ?? []}
+                    reputation={repOf.get(shown.index) ? <ReputationCard r={repOf.get(shown.index)!.w} rank={repOf.get(shown.index)!.rank} total={repSet!.wallets.length}
+                      chain={selected?.type === 'star' && selected.index === shown.index ? chain[galaxy.stars[shown.index].address] : null} /> : null}
                     onPlanet={(i) => select({ type: 'planet', index: i })} onStar={(i) => select({ type: 'star', index: i })} />}
               {selected && <button className="close" onClick={() => select(null)} aria-label="Back to the galaxy">✕</button>}
             </aside>
@@ -227,6 +250,11 @@ export default function Page() {
             <li className="hint"><kbd>H</kbd> back to the whole galaxy</li>
           </ul>
 
+          {!flying && repSet && !shown && !registryOpen && (
+            <button className="regbtn" onClick={() => { setRegistryOpen((o) => !o); setSelected(null); }} aria-pressed={registryOpen}>
+              ⛓ Reputation registry <span>{repSet.stats.scored.toLocaleString()} wallets</span>
+            </button>
+          )}
           {!flying && (
             <button className="flybtn" onClick={() => toggleFlight(true)}>
               <span>Fly the shuttle</span><kbd>F</kbd>

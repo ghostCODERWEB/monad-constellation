@@ -109,7 +109,8 @@ const STAR_VS = /* glsl */ `
     gl_Position = projectionMatrix * mv;
     float tw = 0.82 + 0.18 * sin(uTime * 2.3 + aPhase * 11.0);
     // Never smaller than a couple of pixels, so a distant wallet still reads.
-    gl_PointSize = aSize <= 0.0 ? 0.0 : max(3.0 * uPixel, aSize * uPixel * (260.0 * uScale / -mv.z) * (0.9 + 0.1 * tw));
+    // Between a couple of pixels and a modest orb: up close a star must not flood the screen.
+    gl_PointSize = aSize <= 0.0 ? 0.0 : clamp(aSize * uPixel * (260.0 * uScale / -mv.z) * (0.9 + 0.1 * tw), 3.0 * uPixel, 56.0 * uPixel);
     vColor = aColor;
     vAlpha = aBright * tw;
     if (uFocus >= 0.0 && abs(aHome.x - uFocus) > 0.5 && abs(aHome.y - uFocus) > 0.5) vAlpha *= 0.12;

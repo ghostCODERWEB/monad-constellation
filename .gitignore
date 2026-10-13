@@ -6,3 +6,4 @@ node_modules
 .vercel
 contracts/node_modules
 .cache
+contracts/node_modules

@@ -4,6 +4,7 @@ import { useMemo } from 'react';
 import type { Galaxy, Planet, Star } from '@/lib/galaxy';
 import type { TokenProfile, WalletProfile } from '@/lib/profile';
 import type { Cluster } from '@/lib/clusters';
+import { FLAG_NAMES, type Reputation, type ReputationSet } from '@/lib/repFlags';
 import { KIND } from './GalaxyScene';
 import { worldStyle } from '@/lib/worldStyle';
 import { moonsOf } from '@/lib/moons';
@@ -177,9 +178,9 @@ export function PlanetView({ p, galaxy, token, clusters, onStar }: { p: Planet; 
   );
 }
 
-export function StarView({ s, galaxy, wallet, deep, starIndex, planetIndex, clusters, onPlanet, onStar }: {
+export function StarView({ s, galaxy, wallet, deep, starIndex, planetIndex, clusters, reputation, onPlanet, onStar }: {
   s: Star; galaxy: Galaxy; wallet: WalletProfile | null | undefined; deep: boolean;
-  starIndex: Map<string, number>; planetIndex: Map<string, number>; clusters: Cluster[];
+  starIndex: Map<string, number>; planetIndex: Map<string, number>; clusters: Cluster[]; reputation?: React.ReactNode;
   onPlanet: (i: number) => void; onStar: (i: number) => void;
 }) {
   const links = [...s.links].sort((a, b) => (b.holdingUsd + Math.abs(b.pnlUsd ?? 0)) - (a.holdingUsd + Math.abs(a.pnlUsd ?? 0)));
@@ -191,6 +192,7 @@ export function StarView({ s, galaxy, wallet, deep, starIndex, planetIndex, clus
       <a className="addr" href={`https://app.nansen.ai/profiler?address=${s.address}&chain=monad`} target="_blank" rel="noreferrer">{short(s.address)} · open in Nansen ↗</a>
       {s.labels.length > 0 && <div className="tags">{[...new Set(s.labels)].slice(0, 6).map((l) => <span key={l} className="tag">{l}</span>)}</div>}
 
+      {reputation}
       {clusters.filter((c) => c.members.includes(galaxy.stars.indexOf(s))).map((c) => <ClusterCard key={c.id} c={c} galaxy={galaxy} onStar={onStar} self={galaxy.stars.indexOf(s)} />)}
 
       {deep && wallet === undefined && <p className="note scanning">Scanning with seven Nansen profiler endpoints…</p>}
@@ -359,5 +361,107 @@ function ClusterCard({ c, galaxy, onStar, self }: { c: Cluster; galaxy: Galaxy; 
       </ul>
       <p className="note">Source: first funders from Nansen profiler/address/related-wallets; transfers from tgm/transfers. A shared funder is a signal, not proof.</p>
     </div>
+  );
+}
+
+export interface OnChain { deployed: boolean; registry?: string; collateral?: string | null; score?: number; flags?: number; updatedAt?: number; epoch?: number; collateralBps?: number | null; error?: string }
+
+const PART_LABEL: [keyof Reputation['parts'], string, string][] = [
+  ['profit', 'Proven profit', 'tgm/pnl-leaderboard'],
+  ['labels', 'Nansen labels', 'holders · trades'],
+  ['breadth', 'Breadth', 'tokens touched'],
+  ['size', 'Size', 'holdings + volume'],
+  ['insider', 'Insider penalty', 'clusters'],
+];
+const TIER_COLOR: Record<string, string> = { Proven: '#f5c542', Trusted: '#4ade80', Known: '#a78bfa', Unproven: '#6b7280', 'Insider-linked': '#ef4444' };
+
+/** A wallet's reputation: the score, where every point came from, and what Monad holds. */
+export function ReputationCard({ r, chain, rank, total }: { r: Reputation; chain: OnChain | null | undefined; rank: number; total: number }) {
+  const c = TIER_COLOR[r.tier];
+  const R = 30, C = 2 * Math.PI * R;
+  const flags = FLAG_NAMES.filter(([bit]) => r.flags & bit).map(([, n]) => n);
+  return (
+    <div className="rep" style={{ borderColor: `${c}66` }}>
+      <div className="rep-head">
+        <div className="dial" aria-label={`Reputation ${r.score} of 1000`}>
+          <svg viewBox="0 0 72 72" aria-hidden>
+            <circle cx="36" cy="36" r={R} className="track" />
+            <circle cx="36" cy="36" r={R} fill="none" stroke={c} strokeWidth="6" strokeLinecap="round" strokeDasharray={`${(C * r.score) / 1000} ${C}`} transform="rotate(-90 36 36)" style={{ filter: `drop-shadow(0 0 5px ${c})` }} />
+          </svg>
+          <b>{r.score}</b>
+        </div>
+        <div>
+          <span className="eyebrow">Monad reputation · nansen-rep-v1</span>
+          <b className="tier" style={{ color: c }}>{r.tier}</b>
+          <span className="sub">#{rank.toLocaleString()} of {total.toLocaleString()} wallets</span>
+        </div>
+      </div>
+      <ul className="parts">
+        {PART_LABEL.map(([k, name, src]) => {
+          const v = r.parts[k];
+          if (k === 'insider' && v === 0) return null;
+          return (
+            <li key={k}>
+              <span>{name} <small>{src}</small></span>
+              <span className="bar"><i className={v < 0 ? 'out' : 'in'} style={{ width: `${Math.min(100, Math.abs(v) / 4)}%` }} /></span>
+              <b className={v < 0 ? 'down' : ''}>{v > 0 ? '+' : ''}{v}</b>
+            </li>
+          );
+        })}
+      </ul>
+      {flags.length > 0 && <div className="tags">{flags.map((f) => <span key={f} className={`tag ${f.startsWith('Insider') || f.startsWith('Cluster') ? 'red' : ''}`}>{f}</span>)}</div>}
+      <div className="chain">
+        {chain === undefined ? <span>Reading Monad…</span>
+          : !chain || !chain.deployed ? <span>Not published on Monad yet. Deploy the registry and run <code>publish.mjs</code>.</span>
+          : chain.error ? <span>Registry unreachable: {chain.error}</span>
+          : chain.updatedAt ? <span>On Monad: <b>{chain.score}</b> (epoch {chain.epoch}, {new Date(chain.updatedAt * 1000).toISOString().slice(0, 16).replace('T', ' ')} UTC){chain.collateralBps ? <> · a ReputationCollateral loan needs <b>{chain.collateralBps / 100}%</b> collateral</> : null}</span>
+          : <span>Registry live; this wallet is not in the published epoch.</span>}
+      </div>
+    </div>
+  );
+}
+
+/** The registry: what it is, who leads, and how another contract uses it. */
+export function RegistryPanel({ set, galaxy, onStar }: { set: ReputationSet; galaxy: Galaxy; onStar: (i: number) => void }) {
+  const registry = process.env.NEXT_PUBLIC_REPUTATION_ADDRESS;
+  return (
+    <>
+      <span className="eyebrow">On-chain infrastructure</span>
+      <h2>Reputation registry</h2>
+      <p className="lede-sm">Every wallet in this galaxy scored 0–1000 from Nansen data, published to <b>MonadReputation</b> so any Monad contract can ask whether a wallet has a track record, and refuse insiders.</p>
+      <div className="stats reg-stats">
+        <div><b>{set.stats.scored.toLocaleString()}</b><span>wallets scored</span></div>
+        <div><b style={{ color: '#f5c542' }}>{set.stats.proven + set.stats.trusted}</b><span>proven or trusted</span></div>
+        <div><b className="down">{set.stats.insiders}</b><span>insider-linked</span></div>
+      </div>
+      <h4>Highest reputations</h4>
+      <ul className="people">
+        {set.wallets.slice(0, 12).map((w) => {
+          const s = galaxy.stars[w.star];
+          return (
+            <li key={w.address}><button onClick={() => onStar(w.star)}>
+              <i style={{ background: TIER_COLOR[w.tier] }} /><span>{s.name}</span>
+              <em>{w.tier} · {s.links.length} token{s.links.length > 1 ? 's' : ''}</em>
+              <b>{w.score}</b>
+            </button></li>
+          );
+        })}
+      </ul>
+      <h4>Use it from a contract</h4>
+      <pre className="code">{`interface IMonadReputation {
+  function isTrusted(address wallet, uint16 minScore)
+    external view returns (bool);
+}
+
+// e.g. a launch allowlist that refuses insider clusters
+require(rep.isTrusted(msg.sender, 300), "no track record");`}</pre>
+      <dl>
+        <dt>Contract</dt><dd>{registry ? <a href={`https://monadscan.com/address/${registry}`} target="_blank" rel="noreferrer">{short(registry)} ↗</a> : 'not deployed yet'}</dd>
+        <dt>Methodology</dt><dd>{set.methodology}</dd>
+        <dt>Dataset hash</dt><dd title={set.datasetHash}>{short(set.datasetHash)}</dd>
+        <dt>Demo consumer</dt><dd>ReputationCollateral: 110–150%, insiders 200%</dd>
+      </dl>
+      <p className="note">Scores are a reading of public data, not a verdict. The dataset hash lets anyone check a published epoch against this file.</p>
+    </>
   );
 }
