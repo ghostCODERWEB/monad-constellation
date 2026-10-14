@@ -17,8 +17,10 @@ import { PlanetView, RegistryPanel, ReputationCard, StarView, money, signed } fr
 import { KIND } from '@/components/GalaxyScene';
 import { askAgent } from './AgentPanel';
 import { UNIVERSES, type UniverseId } from '@/lib/universes';
+import { DESK_TABS, DeskView, type DeskTab } from './desk/DeskView';
 
-type Tab = 'tokens' | 'wallets' | 'radar' | 'reputation';
+type Tab = DeskTab | 'tokens' | 'wallets' | 'radar' | 'reputation';
+const isDesk = (t: Tab): t is DeskTab => DESK_TABS.some((d) => d.id === t);
 type Sel = { type: 'planet' | 'star'; index: number } | null;
 
 const pct = (n: number | null) => n == null ? '—' : `${n >= 0 ? '+' : ''}${n.toFixed(1)}%`;
@@ -28,7 +30,16 @@ export function ResearchPC({ engine }: { engine: Engine }) {
   const [error, setError] = useState<string | null>(null);
   const [report, setReport] = useState<ClusterReport | null>(null);
   const [repSet, setRepSet] = useState<ReputationSet | null>(null);
-  const [tab, setTab] = useState<Tab>('tokens');
+  const [tab, setTab] = useState<Tab>(engine.subject ? 'tokens' : 'overview');
+  // The Token Checker's token, and a token whose world dossier a desk tab asked to open.
+  const [checkAddr, setCheckAddr] = useState<string | null>(null);
+  const [wantDossier, setWantDossier] = useState<string | null>(null);
+  const openCheck = (address: string) => { setCheckAddr(address); setTab('checker'); };
+  const openDossier = (address: string, universe: string | null) => {
+    setWantDossier(address);
+    if (universe && UNIVERSES.some((u) => u.id === universe)) setUni(universe as UniverseId);
+    setTab('tokens');
+  };
   const [q, setQ] = useState('');
   const [sel, setSel] = useState<Sel>(null);
   const [tokens, setTokens] = useState<Record<string, TokenProfile | null | undefined>>({});
@@ -71,6 +82,12 @@ export function ResearchPC({ engine }: { engine: Engine }) {
     fetch(`/api/reputation?u=${uni}`).then((r) => r.ok ? r.json() : null).then((x) => !dead && setRepSet(x)).catch(() => {});
     return () => { dead = true; };
   }, [uni, engine]);
+
+  useEffect(() => {
+    if (!galaxy || !wantDossier) return;
+    const i = galaxy.planets.findIndex((p) => p.address.toLowerCase() === wantDossier.toLowerCase());
+    if (i >= 0) { setSel({ type: 'planet', index: i }); setWantDossier(null); }
+  }, [galaxy, wantDossier]);
 
   const addr = galaxy && sel ? (sel.type === 'planet' ? galaxy.planets[sel.index].address : galaxy.stars[sel.index].address) : null;
   useEffect(() => {
@@ -145,14 +162,19 @@ export function ResearchPC({ engine }: { engine: Engine }) {
         <img src="/brand/nansen-mark.gif" alt="" />
         <div><b>NANSEN RESEARCH TERMINAL</b><span>Monad{uni ? ` · ${UNIVERSES.find((u) => u.id === uni)?.name}` : ''} · data from Nansen{galaxy ? ` · built ${new Date(galaxy.builtAt).toUTCString().slice(17, 22)} UTC` : ''}</span></div>
         <nav>
-          {(['tokens', 'wallets', 'radar', 'reputation'] as Tab[]).map((t) => (
-            <button key={t} className={tab === t ? 'on' : ''} onClick={() => { setTab(t); setSel(null); }}>
+          {DESK_TABS.map((t) => <button key={t.id} className={tab === t.id ? 'on' : ''} onClick={() => { setTab(t.id); setSel(null); }}>{t.label}</button>)}
+          <i className="sep" aria-hidden />
+          {(['tokens', 'wallets', 'radar', 'reputation'] as const).map((t) => (
+            <button key={t} className={tab === t ? 'on alt' : 'alt'} onClick={() => { setTab(t); setSel(null); }}>
               {t === 'tokens' ? 'Token worlds' : t === 'wallets' ? 'Wallets' : t === 'radar' ? 'Insider radar' : 'Reputation'}
             </button>
           ))}
         </nav>
         <button className="agent-x" onClick={close} aria-label="Close">✕</button>
       </header>
+      {isDesk(tab) ? (
+        <div className="pc-desk"><DeskView tab={tab} address={checkAddr} setAddress={setCheckAddr} check={openCheck} dossier={openDossier} /></div>
+      ) : (<>
       <div className="pc-unis" role="group" aria-label="Universe">
         {UNIVERSES.map((u) => <button key={u.id} className={uni === u.id ? 'on' : ''} style={{ ['--u' as string]: u.color }} onClick={() => setUni(u.id)}>{u.name}</button>)}
         <span>Category assigned by this app from each token’s Nansen name</span>
@@ -241,7 +263,8 @@ export function ResearchPC({ engine }: { engine: Engine }) {
           )}
         </aside>
       </div>
-      <footer>Sources: Nansen API (token screener, TGM, profiler, smart money) via this station’s server · research only, not financial advice · no wallet connection, no trading</footer>
+      </>)}
+      <footer>Sources: Nansen API (token screener, TGM, profiler, smart money) via this station’s server · Monad only · research and paper trading only: no wallet connection, no real orders</footer>
       <div className="pc-glare" aria-hidden />
     </section>
     </div>
