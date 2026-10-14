@@ -184,7 +184,7 @@ export function Checker({ desk, address, setAddress, dossier }: { desk: Desk; ad
               <ul className="dk-flows">{r.flows.map((f) => <li key={f.key}><span>{FLOW_LABEL[f.key] ?? f.key}</span><b className={tone(f.netUsd)}>{f.netUsd === 0 ? '$0' : `${f.netUsd > 0 ? '+' : ''}${usd(f.netUsd)}`}</b><em>{f.wallets != null ? `${f.wallets} wallets` : ''}</em></li>)}</ul>
               <p className="dk-note">Net flow by cohort, 24h. A cohort at $0 simply had no activity on this token.</p>
               <div className="dk-trend"><span>Holders, 30 days</span><Spark values={r.trend.map((t) => t.holders)} w={220} /></div>
-              <ul className="dk-inds">{r.indicators.map((i) => <li key={i.type + i.kind} className={i.kind}><b>{i.type.replace(/-/g, ' ')}</b><span>{i.level ?? 'n/a'}{i.percentile != null ? ` · ${Math.round(i.percentile)}th pct` : ''}</span></li>)}</ul>
+              <ul className="dk-inds">{r.indicators.map((i) => <li key={i.type + i.kind} className={i.kind}><b>{i.type.replace(/-/g, ' ')}</b><span>{i.level ?? 'n/a'}{i.percentile != null ? ` · percentile ${Math.round(i.percentile)}` : ''}</span></li>)}</ul>
             </Card>
           </div>
           <p className="dk-note">Sources: {r.sources.join(', ')} · {r.credits} Nansen credits · checked {new Date(r.fetchedAt).toUTCString().slice(17, 22)} UTC.</p>

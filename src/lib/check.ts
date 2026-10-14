@@ -51,7 +51,7 @@ const kindOf = (label: string): HolderRow['kind'] =>
 
 const CHECK_TTL = 30 * 60_000;
 
-export const checkToken = (address: string) => diskCached<TokenCheck>(`check:${address}`, async () => {
+export const checkToken = (address: string) => diskCached<TokenCheck>(`check2:${address}`, async () => {
   const now = new Date();
   let credits = 0;
   const sources = new Set<string>();
@@ -63,8 +63,9 @@ export const checkToken = (address: string) => diskCached<TokenCheck>(`check:${a
   const base = { chain: 'monad', token_address: address };
   const ago = (d: number) => new Date(now.getTime() - d * 86_400_000).toISOString();
 
-  const [info, holders, flowInt, wbs, ind, ohlcv, flows, index] = await Promise.all([
-    call<{ name?: string; logo?: string; symbol?: string; token_details?: Record<string, unknown>; spot_metrics?: Record<string, number> }>('tgm/token-information', { ...base, timeframe: '1d' }),
+  type Info = { name?: string; logo?: string; symbol?: string; token_details?: Record<string, unknown>; spot_metrics?: Record<string, number> };
+  const [infoRaw, holders, flowInt, wbs, ind, ohlcv, flows, index] = await Promise.all([
+    call<Info & { data?: Info }>('tgm/token-information', { ...base, timeframe: '1d' }),
     call<{ data: Holder[] }>('tgm/holders', { ...base, pagination: { page: 1, per_page: 100 }, order_by: [{ field: 'token_amount', direction: 'DESC' }] }),
     call<{ data: Record<string, number | null>[] }>('tgm/flow-intelligence', { ...base, timeframe: '1d' }),
     call<{ data: Trader[] }>('tgm/who-bought-sold', { ...base, date: { from: ago(7), to: now.toISOString() }, pagination: { page: 1, per_page: 100 } }),
@@ -74,6 +75,7 @@ export const checkToken = (address: string) => diskCached<TokenCheck>(`check:${a
     getTokenIndex(),
   ]);
 
+  const info: Info | null = infoRaw ? (infoRaw.data ?? infoRaw) : null; // Nansen wraps this one in `data` on some responses
   const meta = index.find((t) => t.address === address);
   const d = info?.token_details ?? {};
   const spotRaw = info?.spot_metrics;

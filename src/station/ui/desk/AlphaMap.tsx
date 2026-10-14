@@ -15,7 +15,9 @@ export function AlphaMap({ desk, open }: { desk: Desk; open: (address: string) =
   const [liquid, setLiquid] = useState(true);
   const [hover, setHover] = useState<DeskToken | null>(null);
   const pts = useMemo(() => desk.tokens.filter((t) => (t.volume24h ?? 0) >= 100 && t.netflow24h != null && t.change24h != null && (only === 'all' || t.universe === only) && (!liquid || (t.liquidity ?? 0) >= 50_000)), [desk, only, liquid]);
-  const X = (v: number) => PAD.l + ((Math.max(-30, Math.min(30, v)) + 30) / 60) * (W - PAD.l - PAD.r);
+  // The x axis spans what the tokens actually did (at least ±3%, at most ±30%), so a quiet day isn't a vertical line.
+  const xr = useMemo(() => { const m = pts.map((t) => Math.abs(t.change24h ?? 0)).sort((a, b) => a - b); return Math.max(3, Math.min(30, (m[Math.floor(m.length * 0.92)] ?? 3) * 1.15)); }, [pts]);
+  const X = (v: number) => PAD.l + ((Math.max(-xr, Math.min(xr, v)) + xr) / (2 * xr)) * (W - PAD.l - PAD.r);
   const Y = (v: number) => PAD.t + (1 - (Math.max(-1, Math.min(1, v)) + 1) / 2) * (H - PAD.t - PAD.b);
   const color = (u: string) => UNIVERSES.find((x) => x.id === u)?.color ?? '#836ef9';
   const cols: Col<DeskToken>[] = [
@@ -41,7 +43,7 @@ export function AlphaMap({ desk, open }: { desk: Desk; open: (address: string) =
           <rect x={W / 2 + (PAD.l - PAD.r) / 2} y={PAD.t} width={(W - PAD.l - PAD.r) / 2} height={(H - PAD.t - PAD.b) / 2} fill="rgba(74,222,128,0.07)" />
           <line x1={X(0)} x2={X(0)} y1={PAD.t} y2={H - PAD.b} stroke="rgba(255,255,255,0.2)" />
           <line x1={PAD.l} x2={W - PAD.r} y1={Y(0)} y2={Y(0)} stroke="rgba(255,255,255,0.2)" />
-          {[-30, -15, 15, 30].map((v) => <text key={v} x={X(v)} y={H - 12} textAnchor="middle" className="ax">{v > 0 ? '+' : '−'}{Math.abs(v)}%</text>)}
+          {[-1, -0.5, 0.5, 1].map((f) => { const v = f * xr; return <text key={f} x={X(v)} y={H - 12} textAnchor="middle" className="ax">{v > 0 ? '+' : '−'}{Math.abs(v).toFixed(1)}%</text>; })}
           {[-1, -0.5, 0.5, 1].map((v) => <text key={v} x={PAD.l - 8} y={Y(v) + 4} textAnchor="end" className="ax">{v > 0 ? '+' : '−'}{Math.abs(v) * 100}%</text>)}
           <text x={W - PAD.r - 4} y={PAD.t + 14} textAnchor="end" className="qd up">bought and rising</text>
           <text x={PAD.l + 4} y={PAD.t + 14} className="qd">bought while falling</text>

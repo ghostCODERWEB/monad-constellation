@@ -191,7 +191,7 @@ async function build(): Promise<Desk> {
   };
 }
 
-export const getDesk = () => cached('desk', TTL, async () => {
+export const getDesk = () => cached('desk-v2', TTL, async () => {
   const file = path.join(DIR, 'desk.json');
   try {
     const d = JSON.parse(await readFile(file, 'utf8')) as Desk;
