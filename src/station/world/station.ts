@@ -553,6 +553,8 @@ export function buildStation(): Station {
       kp.rotation.y = sx > 0 ? -Math.PI / 2 : Math.PI / 2; kp.position.set(sx * (HG.x - 0.02), -HG.y + 0.3, cz); add(kp);
     }
     for (const lx of [-2.1, 2.1]) { const m = new THREE.Mesh(new THREE.PlaneGeometry(0.16, len - 1), lineYellow); m.rotation.x = -Math.PI / 2; m.position.set(lx, -HG.y + 0.012, cz); add(m); }
+    const threshold = new THREE.Mesh(new THREE.PlaneGeometry(HG.x * 2 - 0.5, 0.75), new THREE.MeshStandardMaterial({ map: labelTexture(['◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤'], { bg: '#facc15', fg: '#111', w: 2048, h: 128, font: 90 }), roughness: 0.75 }));
+    threshold.rotation.x = -Math.PI / 2; threshold.position.set(0, -HG.y + 0.016, HG.z0 + 0.55); add(threshold);
     const decal = new THREE.Mesh(new THREE.PlaneGeometry(6, 1.5), new THREE.MeshStandardMaterial({ map: plateTexture(['SHUTTLE BAY 01'], { bg: '#232733', fg: '#facc15', w: 2048, h: 512, font: 200 }), roughness: 0.7, transparent: true }));
     decal.rotation.x = -Math.PI / 2; decal.position.set(0, -HG.y + 0.015, HG.z1 - 3.2); add(decal);
     // Caged work lights along both walls: housing, cage bars and a diffuser.
@@ -567,9 +569,9 @@ export function buildStation(): Station {
     add(sign);
     // Bay equipment, each where it would be used: ground-support panel at the cradle, door control by the hatch,
     // fire-suppression main and nozzles overhead, an extinguisher cabinet, an amber beacon over the doors.
-    const gse = boxPBR(0.14, 1.5, 1.9, hubFrame, 0.5); gse.position.set(-HG.x + 0.1, -1.6, -11.5); add(gse);
-    const gsePlate = new THREE.Mesh(new THREE.PlaneGeometry(1.7, 1.3), new THREE.MeshStandardMaterial({ map: plateTexture(['GROUND SUPPORT', 'FUEL · POWER · DATA', 'CRADLE 01'], { bg: '#e9e6de', w: 1024, h: 768, font: 92 }), roughness: 0.55 }));
-    gsePlate.rotation.y = Math.PI / 2; gsePlate.position.set(-HG.x + 0.18, -1.6, -11.5); add(gsePlate);
+    const gse = boxPBR(0.14, 1.5, 1.9, hubFrame, 0.5); gse.position.set(HG.x - 0.1, -1.6, -16.0); add(gse);
+    const gsePlate = new THREE.Mesh(new THREE.PlaneGeometry(1.7, 1.3), new THREE.MeshStandardMaterial({ map: plateTexture(['GROUND SUPPORT', 'FUEL · POWER · DATA', 'STAND 01'], { bg: '#e9e6de', w: 1024, h: 768, font: 92 }), roughness: 0.55 }));
+    gsePlate.rotation.y = -Math.PI / 2; gsePlate.position.set(HG.x - 0.18, -1.6, -16.0); add(gsePlate);
     const ctl = boxPBR(0.9, 0.7, 0.12, hubFrame, 0.5); ctl.position.set(-1.8, 0.7, HG.z1 - 0.1); add(ctl);
     const ctlFace = new THREE.Mesh(new THREE.PlaneGeometry(0.8, 0.6), new THREE.MeshStandardMaterial({ map: plateTexture(['BAY CONTROL', 'DOORS CLOSED', 'SHUTTLE DOCKED'], { bg: '#0b1713', fg: '#6ff0c0', w: 1024, h: 768, font: 100 }), roughness: 0.35 }));
     ctlFace.rotation.y = Math.PI; ctlFace.position.set(-1.8, 0.7, HG.z1 - 0.17); add(ctlFace);
@@ -715,7 +717,6 @@ export function buildStation(): Station {
     if (x < 0.4) {
       // Hangar. The gangway runs from the walkway sill down to the deck along z ≈ 0.
       if (Math.abs(z) < 0.66 && x > -6.9) return mix(-3.95, -1.05, -6.9, 0.4, x);
-      if (x > -7.5 && x < -4.3 && Math.abs(z) < 3) return -3.72; // the cradle
       return -4.0;
     }
     if (x < 2.8) return mix(-1.05, -1.5, 2.3, 3.3, x);   // walkway into the research room
@@ -730,7 +731,7 @@ export function buildStation(): Station {
     workstation: V(8.2, -0.25, -1.2),
     workstationSeat: V(8.2, 0.05, -0.35),
     hangarConsole: V(0, 0.6, 1.4),
-    shuttleDock: V(-5.9, -0.6, 0),
+    shuttleDock: V(-10.8, -2.0, -2.35),
   };
 
   // Static walls, racks, frames and fittings become one mesh per material; the doors, beacon and workstation stay live.

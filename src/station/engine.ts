@@ -83,7 +83,7 @@ export class Engine {
   private lastEmit = 0;
   private raf = 0;
   private bob = 0;
-  private clock = new THREE.Clock();
+  private clock = new THREE.Timer();
   private toast: { text: string; until: number } | null = null;
   private el: HTMLElement;
   subject: Subject | null = null;
@@ -98,7 +98,7 @@ export class Engine {
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.setSize(el.clientWidth, el.clientHeight);
     this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.renderer.shadowMap.type = THREE.PCFShadowMap;
     // ?q=0..3 pins the quality (for screenshots and low-end checks); otherwise it adapts.
     const pin = new URLSearchParams(window.location.search).get('q');
     if (pin !== null && /^[0-3]$/.test(pin)) { this.quality = Number(pin); this.pinned = true; }
@@ -185,10 +185,11 @@ export class Engine {
 
   on(f: (s: EngineState) => void) { this.listeners.add(f); return () => { this.listeners.delete(f); }; }
 
-  start() { this.clock.start(); this.loop(); }
+  start() { this.clock.reset(); this.loop(); }
 
   private loop = () => {
     this.raf = requestAnimationFrame(this.loop);
+    this.clock.update();
     const dt = Math.min(0.05, this.clock.getDelta());
     this.t += dt;
     this.input.poll();
@@ -336,6 +337,7 @@ export class Engine {
 
   dispose() {
     cancelAnimationFrame(this.raf);
+    this.clock.dispose();
     window.removeEventListener('resize', this.onResize);
     this.renderer.domElement.removeEventListener('click', this.onClick);
     this.input.dispose();

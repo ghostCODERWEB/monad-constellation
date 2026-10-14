@@ -25,7 +25,6 @@ export default function Page() {
   const [flying, setFlying] = useState(false);
   const [hud, setHud] = useState<FlightHud | null>(null);
   const [report, setReport] = useState<ClusterReport | null>(null);
-  const [radarOpen, setRadarOpen] = useState(true);
   const [timeline, setTimeline] = useState<Timeline | null>(null);
   const [rep, setRep] = useState<ReplayState>({ t: 0, playing: false });
   const [speed, setSpeed] = useState(360_000);
@@ -46,6 +45,7 @@ export default function Page() {
   useEffect(() => {
     const q = new URLSearchParams(window.location.search);
     const asked = q.get('universe'), fly = q.get('fly')?.toLowerCase();
+    setFlying(q.get('flight') === '1');
     const valid = (x: string | null | undefined): x is UniverseId => !!x && UNIVERSES.some((u) => u.id === x);
     fetch('/api/universes').then((r) => r.ok ? r.json() : null).then((idx: { universes: { id: UniverseId; tokens: { address: string }[] }[] } | null) => {
       if (idx) setTokenCounts(Object.fromEntries(idx.universes.map((u) => [u.id, u.tokens.length])));
@@ -64,7 +64,8 @@ export default function Page() {
       if (dead) return;
       if (!r.ok) throw new Error(j.message ?? 'The galaxy could not be built.');
       setGalaxy(j);
-      setTimeout(() => !dead && setIntroDone(true), 3800);
+      if (new URLSearchParams(window.location.search).get('flight') === '1') setIntroDone(true);
+      else setTimeout(() => !dead && setIntroDone(true), 3800);
       // Tracing first funders is slower than the galaxy, so it follows it.
       fetch(`/api/clusters?u=${universe}`).then((r) => r.ok ? r.json() : null).then((c) => !dead && c && setReport(c)).catch(() => {});
       fetch(`/api/timeline?u=${universe}`).then((r) => r.ok ? r.json() : null).then((t) => !dead && t && setTimeline(t)).catch(() => {});
@@ -74,8 +75,8 @@ export default function Page() {
   }, [universe]);
   const switchUniverse = useCallback((u: UniverseId) => {
     if (u === universe) return;
-    if (flying) { setFlying(false); setHud(null); }
-    window.history.replaceState(null, '', `/galaxy?universe=${u}`);
+    setHud(null);
+    window.history.replaceState(null, '', `/galaxy?universe=${u}${flying ? '&flight=1' : ''}`);
     setUniverse(u);
   }, [universe, flying]);
 
@@ -101,6 +102,7 @@ export default function Page() {
     arrived.current = true;
     const want = new URLSearchParams(window.location.search).get('fly')?.toLowerCase();
     if (!want) return;
+    if (new URLSearchParams(window.location.search).get('flight') === '1') return;
     const index = galaxy.planets.findIndex((p) => p.address.toLowerCase() === want);
     if (index >= 0) select({ type: 'planet', index });
     else setNotFound(want);
@@ -145,7 +147,6 @@ export default function Page() {
     const onKey = (e: KeyboardEvent) => {
       if ((e.target as HTMLElement)?.tagName === 'INPUT') return;
       if (e.key === 'Escape') { if (selected) select(null); else if (flying) toggleFlight(false); }
-      else if (e.code === 'KeyF' && galaxy && introDone) toggleFlight(!flying);
       else if (e.code === 'KeyR' && flying) scene.current?.scan();
       else if (e.code === 'KeyB' && flying && hud?.station.dockable) window.location.assign(homeHref);
       else if (e.code === 'KeyH' && !flying && galaxy) home();
@@ -219,7 +220,7 @@ export default function Page() {
 
   return (
     <main>
-      {galaxy && <GalaxyScene key={galaxy.universe} ref={scene} galaxy={galaxy} focus={selected ?? hover} onHover={setHover} onSelect={select} onFlight={setHud} ties={ties} clusters={report?.clusters}
+      {galaxy && <GalaxyScene key={galaxy.universe} ref={scene} galaxy={galaxy} focus={selected ?? hover} flying={flying} onHover={setHover} onSelect={select} onFlight={setHud} onUniverseJump={switchUniverse} ties={ties}
         timeline={timeline} onReplay={setRep} onTrade={onTrade} />}
 
       <a className="to-station" href={homeHref} title="Dock back at the orbital station">← Station</a>
@@ -250,29 +251,6 @@ export default function Page() {
 
       {galaxy && introDone && (
         <>
-          {!flying && (
-            <section className={`radar ${radarOpen ? '' : 'closed'}`} aria-label="Insider radar">
-              <button className="radar-head" onClick={() => setRadarOpen((o) => !o)} aria-expanded={radarOpen}>
-                <b>Insider radar</b>
-                <span>{report ? `${report.clusters.length} clusters · ${report.checked} holders traced` : 'Tracing first funders…'}</span>
-              </button>
-              {radarOpen && report && (
-                <ul>
-                  {report.clusters.map((c) => (
-                    <li key={c.id}>
-                      <button onClick={() => select({ type: 'planet', index: c.planet })}>
-                        <i className={c.severity} />
-                        <b>${galaxy.planets[c.planet].symbol}</b>
-                        <span>{(c.share * 100).toFixed(1)}%</span>
-                        <em>{c.kind === 'funded' ? `${c.members.length} wallets, one funder` : `${c.members.length} wallets trading in a ring`}{c.alsoIn.length ? ` · also in ${c.alsoIn.length} more` : ''}</em>
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </section>
-          )}
-
           <div className="search">
             <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Find a token, wallet, ENS or label…" aria-label="Search the galaxy" />
             {results.length > 0 && (
@@ -317,12 +295,6 @@ export default function Page() {
               ⛓ Reputation registry <span>{repSet.stats.scored.toLocaleString()} wallets</span>
             </button>
           )}
-          {!flying && (
-            <button className="flybtn" onClick={() => toggleFlight(true)}>
-              <span>Fly the shuttle</span><kbd>F</kbd>
-            </button>
-          )}
-
           {flying && (
             <div className="cockpit" aria-live="polite">
               <div className="reticle"><i /><i /><i /><i /></div>
@@ -371,6 +343,7 @@ export default function Page() {
                 <li><kbd>Space</kbd> brake</li>
                 <li>drag to steer</li>
                 <li>fly low over a world for an expedition</li>
+                <li>fly through a jump ring to enter another universe</li>
                 <li><kbd>Esc</kbd> back to orbit view</li>
               </ul>
             </div>

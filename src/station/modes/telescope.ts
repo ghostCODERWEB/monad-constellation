@@ -475,7 +475,6 @@ export function installTelescope(e: Engine) {
         const tk = current.token;
         e.setSubject({ kind: 'token', address: tk.address, label: `$${tk.symbol}`, source: 'telescope', universe: tk.universe });
         if (inp.hit('KeyP')) { e.setMode('pc'); return; }
-        if (inp.hit('KeyB')) { e.setMode('shuttle'); return; }
       }
 
       // The instrument follows the aim, so it visibly slews.

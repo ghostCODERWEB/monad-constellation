@@ -16,7 +16,7 @@ const pct = (n: number | null) => n == null ? '—' : `${n >= 0 ? '+' : ''}${n.t
 
 export function ShuttlePanel({ engine }: { engine: Engine }) {
   const [planets, setPlanets] = useState<Dest[] | null>(null);
-  const [uni, setUni] = useState<UniverseId | 'all'>('all');
+  const [uni, setUni] = useState<UniverseId>('majors');
   const [error, setError] = useState<string | null>(null);
   const [q, setQ] = useState('');
   const [launching, setLaunching] = useState<Dest | { free: UniverseId } | null>(null);
@@ -42,7 +42,7 @@ export function ShuttlePanel({ engine }: { engine: Engine }) {
   const list = useMemo(() => {
     const s = q.trim().toLowerCase().replace(/^\$/, '');
     return (planets ?? [])
-      .filter((p) => uni === 'all' || p.universe === uni)
+      .filter((p) => p.universe === uni)
       .filter((p) => !s || p.symbol.toLowerCase().includes(s) || p.address.toLowerCase().includes(s))
       .sort((a, b) => Number(b.address.toLowerCase() === subject) - Number(a.address.toLowerCase() === subject) || (b.marketCap ?? 0) - (a.marketCap ?? 0));
   }, [planets, q, subject, uni]);
@@ -60,7 +60,9 @@ export function ShuttlePanel({ engine }: { engine: Engine }) {
     setLaunching(to);
     // The shuttle runs its launch sequence; when it has cleared the station, the flight continues in the galaxy.
     (engine as unknown as { hangar?: { ignite(done?: () => void): void } }).hangar?.ignite(() => {
-      window.location.href = 'free' in to ? `/galaxy?universe=${to.free}` : `/galaxy?universe=${to.universe}&fly=${to.address}`;
+      window.location.href = 'free' in to
+        ? `/galaxy?universe=${to.free}&flight=1`
+        : `/galaxy?universe=${to.universe}&fly=${to.address}&flight=1`;
     });
     engine.log.add(`flight-${'free' in to ? `free-${to.free}` : to.address}`, 'flight', 'free' in to ? `Free flight · ${UNIVERSES.find((u) => u.id === to.free)?.name}` : `Flight to $${to.symbol}`, 'The shuttle left the hangar for the Monad Constellation.');
   };
@@ -68,7 +70,7 @@ export function ShuttlePanel({ engine }: { engine: Engine }) {
   return (
     <section className={`shuttle ${launching ? 'launching' : ''}`} aria-label="Shuttle flight planner">
       <header>
-        <div><b>Shuttle</b><span>Flight planner · the Monad Constellation</span></div>
+        <div><b>Hangar flight control</b><span>Wall console · universe and token destination</span></div>
         <button className="agent-x" onClick={() => engine.setMode('walk')} aria-label="Close">✕</button>
       </header>
       {launching ? (
@@ -80,15 +82,14 @@ export function ShuttlePanel({ engine }: { engine: Engine }) {
         <>
           <div className="shuttle-top">
             <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search a token world…" autoFocus />
-            <button onClick={() => launch({ free: uni === 'all' ? 'majors' : uni })}>Free flight</button>
+            <button onClick={() => launch({ free: uni })}>Launch</button>
           </div>
           <div className="shuttle-unis" role="group" aria-label="Universe">
-            <button className={uni === 'all' ? 'on' : ''} onClick={() => setUni('all')}>All</button>
             {UNIVERSES.map((u) => <button key={u.id} className={uni === u.id ? 'on' : ''} style={{ ['--u' as string]: u.color }} onClick={() => setUni(u.id)}>{u.name}</button>)}
           </div>
           {error && <p className="agent-err">Token worlds unavailable: {error}</p>}
           {!planets && !error && <p className="agent-wait">Charting the Monad Constellation from Nansen…</p>}
-          {planets && <p className="shuttle-count">{list.length} token worlds{uni === 'all' ? ` in ${new Set(planets.map((p) => p.universe)).size} universes` : ''} · {observed} observed through the telescope</p>}
+          {planets && <p className="shuttle-count">{list.length} token worlds in {UNIVERSES.find((u) => u.id === uni)?.name} · {observed} observed through the telescope</p>}
           <ul>
             {list.map((p) => {
               const st = worldStyle(p);

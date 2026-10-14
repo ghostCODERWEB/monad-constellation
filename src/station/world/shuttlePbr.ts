@@ -2,7 +2,7 @@
 // them as optional overrides; the galaxy keeps its own look). All procedural:
 //   hull    painted pearl aluminium, panel lines and rivets, black thermal tiles
 //           on the belly, reinforced-carbon nose, livery stripe and decals;
-//           2048 × 4096 albedo + baked normal + roughness;
+//           4096 × 2048 albedo + baked normal + roughness;
 //   wing    tiled pearl panels;
 //   foil    gold Kapton/MLI blanket, crumpled, on the engine nacelles;
 //   bell    scorched, heat-tempered steel nozzle with soot streaks.
@@ -24,8 +24,8 @@ function tex(c: HTMLCanvasElement, srgb: boolean, repeat = false) {
   return t;
 }
 
-// Lathe profile of the fuselage, as in components/shuttle.ts: the texture's v runs by point index.
-const PROFILE_Z = [-1.05, -0.98, -0.86, -0.66, -0.42, -0.15, 0.12, 0.38, 0.56, 0.64, 0.64];
+// Loft stations of the fuselage, as in components/shuttle.ts: v runs nose to tail.
+const PROFILE_Z = [-1.18, -1.10, -0.92, -0.66, -0.28, 0.18, 0.55, 0.78, 0.86];
 const vOfZ = (z: number) => {
   for (let i = 0; i < PROFILE_Z.length - 1; i++) {
     if (z >= PROFILE_Z[i] && z <= PROFILE_Z[i + 1]) return (i + (z - PROFILE_Z[i]) / Math.max(1e-6, PROFILE_Z[i + 1] - PROFILE_Z[i])) / (PROFILE_Z.length - 1);
@@ -34,14 +34,15 @@ const vOfZ = (z: number) => {
 };
 
 export function hullMaterial() {
-  const W = 2048, H = 4096;
-  const A = mk(W, H), B = mk(W, H), R = mk(1024, 2048);
+  const W = 4096, H = 2048;
+  const A = mk(W, H), B = mk(2048, 1024), R = mk(2048, 1024);
   const a = A.g, h = B.g, r = R.g;
   r.scale(0.5, 0.5);
+  h.scale(0.5, 0.5);
   const rand = rng(31337);
   // Canvas y is flipped against v: v = 0 (nose) is the bottom of the canvas.
   const Y = (z: number) => (1 - vOfZ(z)) * H;
-  const X = (deg: number) => (deg / 360) * W; // 0° belly, 90° one flank, 180° dorsal, 270° the other flank
+  const X = (deg: number) => (deg / 360) * W; // 0° starboard, 90° dorsal, 180° port, 270° belly
   const rough = (g: number) => `rgb(${g},${g},${g})`;
   const fillAll = (x: number, y: number, w: number, hh: number, col: string, hv: number, rv: number) => {
     a.fillStyle = col; a.fillRect(x, y, w, hh);
@@ -65,7 +66,7 @@ export function hullMaterial() {
 
   // Thermal protection tiles: the belly (±36° about 0°) from the nose cone to the tail.
   const tileY0 = Y(0.62), tileY1 = Y(-0.78);
-  const belly: [number, number][] = [[0, X(38)], [X(322), W]];
+  const belly: [number, number][] = [[X(234), X(306)]];
   const T = 26;
   for (const [x0, x1] of belly) {
     for (let y = tileY0; y < tileY1; y += T) {
@@ -86,7 +87,7 @@ export function hullMaterial() {
   }
   // Gap shadows between tile rows.
   a.fillStyle = 'rgba(0,0,0,0.5)';
-  for (let y = tileY0; y < tileY1; y += T) { a.fillRect(0, y, X(38), 2); a.fillRect(X(322), y, W - X(322), 2); }
+  for (let y = tileY0; y < tileY1; y += T) a.fillRect(X(234), y, X(72), 2);
 
   // Panel lines: rings every 0.22 units, longitudinal seams, drawn into albedo, height and roughness.
   const groove = (x0: number, y0: number, x1: number, y1: number, alpha = 0.55) => {
@@ -122,7 +123,7 @@ export function hullMaterial() {
   }
 
   // Livery: a violet spine stripe with gold pinstripes, over the dorsal seams.
-  const stripeX = X(180), sw = 150;
+  const stripeX = X(90), sw = 220;
   const sTop = Y(-0.5), sBot = Y(0.62);
   a.fillStyle = '#836ef9'; a.fillRect(stripeX - sw / 2, sBot, sw, sTop - sBot);
   a.fillStyle = '#f5c542'; a.fillRect(stripeX - sw / 2 - 22, sBot, 8, sTop - sBot); a.fillRect(stripeX + sw / 2 + 14, sBot, 8, sTop - sBot);
@@ -131,28 +132,28 @@ export function hullMaterial() {
 
   // Decals on both flanks, drawn to read nose-forward from outside.
   const mark = new Path2D(NANSEN_MARK_PATH);
-  for (const [deg, flip] of [[90, 1], [270, -1]] as const) {
+  for (const [deg, flip] of [[3, 1], [180, -1]] as const) {
     a.save();
     a.translate(X(deg), Y(-0.1));
     a.rotate(flip * Math.PI / 2);
     // Wordmark.
-    a.fillStyle = '#2a1f66'; a.font = '800 170px "Helvetica Neue", Arial, sans-serif'; a.textAlign = 'center';
+    a.fillStyle = '#2a1f66'; a.font = '900 430px "Helvetica Neue", Arial, sans-serif'; a.textAlign = 'center';
     a.fillText('MONAD', 0, 40);
-    a.font = '600 54px "Helvetica Neue", Arial, sans-serif'; a.fillStyle = '#3b3270';
-    a.fillText('ORBITAL RESEARCH SHUTTLE', 0, 105);
+    a.font = '700 92px "Helvetica Neue", Arial, sans-serif'; a.fillStyle = '#3b3270';
+    a.fillText('ORBITAL RESEARCH SHUTTLE', 0, 205);
     // Nansen roundel.
-    a.save(); a.translate(-330, -5); a.fillStyle = '#122927'; a.beginPath(); a.arc(0, 0, 86, 0, 7); a.fill();
+    a.save(); a.translate(-620, -20); a.fillStyle = '#122927'; a.beginPath(); a.arc(0, 0, 105, 0, 7); a.fill();
     a.strokeStyle = '#09c385'; a.lineWidth = 8; a.stroke();
     a.scale(150 / NANSEN_MARK_VIEWBOX, 150 / NANSEN_MARK_VIEWBOX); a.translate(-NANSEN_MARK_VIEWBOX / 2, -NANSEN_MARK_VIEWBOX / 2);
     a.fillStyle = '#00ffa7'; a.fill(mark); a.restore();
     // Registration and keep-out marks.
-    a.fillStyle = '#17171c'; a.font = '700 64px "Helvetica Neue", Arial, sans-serif'; a.fillText('NX-1001', 330, 35);
-    a.strokeStyle = '#c0392b'; a.lineWidth = 6; a.strokeRect(-110, 150, 220, 70);
-    a.fillStyle = '#c0392b'; a.font = '800 40px "Helvetica Neue", Arial, sans-serif'; a.fillText('NO STEP', 0, 200);
+    a.fillStyle = '#17171c'; a.font = '800 110px "Helvetica Neue", Arial, sans-serif'; a.fillText('NX-1001', 620, 25);
+    a.strokeStyle = '#c0392b'; a.lineWidth = 8; a.strokeRect(-150, 300, 300, 90);
+    a.fillStyle = '#c0392b'; a.font = '800 54px "Helvetica Neue", Arial, sans-serif'; a.fillText('NO STEP', 0, 365);
     a.restore();
     // Engrave the decal's edges lightly into the height map and keep it glossier.
     h.save(); h.translate(X(deg), Y(-0.1)); h.rotate(flip * Math.PI / 2);
-    h.fillStyle = '#909090'; h.font = '800 170px "Helvetica Neue", Arial, sans-serif'; h.textAlign = 'center'; h.fillText('MONAD', 0, 40);
+    h.fillStyle = '#909090'; h.font = '900 430px "Helvetica Neue", Arial, sans-serif'; h.textAlign = 'center'; h.fillText('MONAD', 0, 40);
     h.fillText('', 0, 0); h.restore();
   }
   // Nose mark on the dorsal side near the canopy, and a lettered panel under the canopy.
@@ -178,7 +179,8 @@ export function hullMaterial() {
   const roughnessMap = tex(R.c, false);
   return new THREE.MeshPhysicalMaterial({
     map, normalMap, normalScale: new THREE.Vector2(1, 1), roughnessMap, roughness: 1, metalness: 0.18,
-    clearcoat: 0.55, clearcoatRoughness: 0.2, envMapIntensity: 1.3,
+    clearcoat: 0.55, clearcoatRoughness: 0.2, envMapIntensity: 1.05, side: THREE.FrontSide,
+    transparent: false, opacity: 1, depthWrite: true,
   });
 }
 
@@ -199,7 +201,7 @@ export function wingMaterial() {
   }
   for (let i = 0; i < 160; i++) { a.fillStyle = `rgba(${rand() < 0.7 ? '50,44,60' : '255,255,255'},${0.03 + rand() * 0.07})`; a.fillRect(rand() * N, rand() * N, 4 + rand() * 80, 1 + rand() * 4); }
   const map = tex(A.c, true, true), normalMap = tex(normalFromHeight(B.c, 3), false, true);
-  for (const t of [map, normalMap]) t.repeat.set(3, 3);
+  for (const t of [map, normalMap]) t.repeat.set(1.35, 1.6);
   return new THREE.MeshPhysicalMaterial({ map, normalMap, roughness: 0.42, metalness: 0.18, clearcoat: 0.45, clearcoatRoughness: 0.25, side: THREE.DoubleSide });
 }
 
@@ -270,6 +272,6 @@ export function shuttleMaterials(): ShuttleMaterials {
   const violet = pbrSet('painted-metal', { albedo: recolouredPaint(0x6d5bd0), normal: 0.7, roughness: 0.8, clearcoat: 0.9, clearcoatRoughness: 0.12 });
   violet.metalness = 0.4;
   const chrome = pbrSet('brushed-aluminium', { color: 0xe8e4f4, normal: 0.6, roughness: 0.55 });
-  const canopy = new THREE.MeshPhysicalMaterial({ color: 0x050d1c, metalness: 0.1, roughness: 0.015, clearcoat: 1, clearcoatRoughness: 0.01, envMapIntensity: 3.4, ior: 1.55, transparent: true, opacity: 0.94, emissive: 0x0b3a52, emissiveIntensity: 0.18 });
+  const canopy = new THREE.MeshPhysicalMaterial({ color: 0x030914, metalness: 0.2, roughness: 0.07, clearcoat: 1, clearcoatRoughness: 0.02, envMapIntensity: 3.4, ior: 1.55, transparent: false, opacity: 1, depthWrite: true, emissive: 0x092f45, emissiveIntensity: 0.16 });
   return { paint: hullMaterial(), wing: wingMaterial(), wingBottom: wingUnderMaterial(), violet, nacelle: foilMaterial(), bell: bellMaterial(), chrome, canopy };
 }

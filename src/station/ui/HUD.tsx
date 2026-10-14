@@ -94,7 +94,7 @@ export function StationHUD({ engine, state }: { engine: Engine; state: EngineSta
             </>
           )}
           <li><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd> autopilot to a room · <kbd>L</kbd> mission log</li>
-          <li><kbd>N</kbd> Nansen AI · <kbd>P</kbd> research PC · <kbd>B</kbd> shuttle · <kbd>Esc</kbd> back · <kbd>H</kbd> hide</li>
+          <li><kbd>N</kbd> Nansen AI · <kbd>P</kbd> research PC · shuttle controls in the hangar · <kbd>Esc</kbd> back · <kbd>H</kbd> hide</li>
         </ul>
       )}
 

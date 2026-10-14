@@ -18,6 +18,7 @@ import { buildShuttle } from './shuttle';
 import { buildStationBeacon } from './stationBeacon';
 import { EARTH_KM, S, STAR_FS, STAR_VS, orbitPos, rng, type Orbit } from './galaxyShared';
 import { buildMoon, buildSun, buildWorld, nebula, type World } from './worlds';
+import { UNIVERSES, type UniverseId } from '@/lib/universes';
 
 export const KIND: Record<StarKind, { color: string; name: string }> = {
   smart: { color: '#f5c542', name: 'Smart trader' },
@@ -71,6 +72,7 @@ export interface GalaxyHandle {
 interface Props {
   galaxy: Galaxy;
   focus: Focus;
+  flying?: boolean;
   /** Lines from the focused star to the wallets it deals with. */
   ties?: Tie[];
   /** Insider clusters: drawn as red tethers from the shared funder. */
@@ -82,6 +84,8 @@ interface Props {
   onHover: (f: Focus) => void;
   onSelect: (f: Focus) => void;
   onFlight?: (h: FlightHud | null) => void;
+  /** Crossing a physical jump ring while piloting changes the loaded universe. */
+  onUniverseJump?: (universe: UniverseId) => void;
 }
 
 
@@ -98,10 +102,10 @@ const money = (x: number) => {
 };
 const esc = (s: string) => s.replace(/[<>&"]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[c]!));
 
-const GalaxyScene = forwardRef<GalaxyHandle, Props>(function GalaxyScene({ galaxy, focus, ties, clusters, timeline, onReplay, onTrade, onHover, onSelect, onFlight }, ref) {
+const GalaxyScene = forwardRef<GalaxyHandle, Props>(function GalaxyScene({ galaxy, focus, flying = false, ties, clusters, timeline, onReplay, onTrade, onHover, onSelect, onFlight, onUniverseJump }, ref) {
   const mount = useRef<HTMLDivElement>(null);
-  const cb = useRef({ onHover, onSelect, onFlight, onReplay, onTrade });
-  cb.current = { onHover, onSelect, onFlight, onReplay, onTrade };
+  const cb = useRef({ onHover, onSelect, onFlight, onReplay, onTrade, onUniverseJump });
+  cb.current = { onHover, onSelect, onFlight, onReplay, onTrade, onUniverseJump };
   const api = useRef<{
     flyTo(f: Focus): void; setFocus(f: Focus): void; setTies(t: Tie[]): void; setClusters(c: Cluster[]): void;
     setTimeline(t: Timeline | null): void; replay(cmd: { playing?: boolean; seek?: number; speed?: number }): void; block(n: number, at: number): void;
@@ -217,15 +221,21 @@ const GalaxyScene = forwardRef<GalaxyHandle, Props>(function GalaxyScene({ galax
       scene.add(n);
     });
 
-    // --- the sun: MON, the chain's native asset, at the centre of everything.
+    // --- the universe anchor. MON is the native star only in Majors; every
+    // other universe is centred on its own largest tracked token.
     const sunPos = { value: new THREE.Vector3(0, 0, 0) };
     const SUN_R = 30;
     const sun = buildSun(SUN_R);
     scene.add(sun.group);
     {
+      const largest = galaxy.planets.reduce((best, p) => (p.marketCap ?? 0) > (best?.marketCap ?? -1) ? p : best, galaxy.planets[0]);
+      const anchor = galaxy.universe === 'majors'
+        ? galaxy.planets.find((p) => p.symbol.toUpperCase() === 'MON') ?? largest
+        : largest;
+      const anchorRole = galaxy.universe === 'majors' ? 'native star' : `${galaxy.universe} market anchor`;
       const div = document.createElement('div');
       div.className = 'plabel sun';
-      div.innerHTML = '<b>MON</b><span>native star</span>';
+      div.innerHTML = `<b>${esc(anchor?.symbol ?? galaxy.universe.toUpperCase())}</b><span>${esc(anchorRole)}</span>`;
       const lbl = new CSS2DObject(div);
       lbl.position.set(0, SUN_R * 1.6, 0);
       sun.group.add(lbl);
@@ -520,7 +530,7 @@ const GalaxyScene = forwardRef<GalaxyHandle, Props>(function GalaxyScene({ galax
     let fly: { from: THREE.Vector3; to: THREE.Vector3; camFrom: THREE.Vector3; camTo: THREE.Vector3; t0: number; follow: Focus } | null = null;
     let follow: Focus = null;
 
-    const clock = new THREE.Clock();
+    const clock = new THREE.Timer();
     const tmp = new THREE.Vector3();
     const positionOf = (f: Focus, out: THREE.Vector3) => f?.type === 'planet' ? out.copy(planetPos[f.index]) : f?.type === 'star' ? starPos(f.index, out) : out.set(0, 0, 0);
 
@@ -618,6 +628,36 @@ const GalaxyScene = forwardRef<GalaxyHandle, Props>(function GalaxyScene({ galax
     const stationLabel = new CSS2DObject(stationTag);
     stationLabel.position.copy(stationPos).add(new THREE.Vector3(0, 70, 0));
     scene.add(stationLabel);
+
+    // Physical inter-universe lanes. They sit off the straight flight path so
+    // the pilot deliberately steers into one instead of using the menu.
+    const universeIndex = Math.max(0, UNIVERSES.findIndex((u) => u.id === galaxy.universe));
+    const laneDefs = [
+      { universe: UNIVERSES[(universeIndex - 1 + UNIVERSES.length) % UNIVERSES.length], x: -40 * S },
+      { universe: UNIVERSES[(universeIndex + 1) % UNIVERSES.length], x: 40 * S },
+    ];
+    const laneSpawn = new THREE.Vector3(0, 260 * S, 420 * S);
+    const jumpLanes = laneDefs.map((lane) => {
+      const group = new THREE.Group();
+      group.position.set(lane.x, 205 * S, 330 * S);
+      const normal = laneSpawn.clone().sub(group.position).normalize();
+      group.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), normal);
+      const ring = new THREE.Mesh(
+        new THREE.TorusGeometry(14 * S, 1.4 * S, 14, 72),
+        new THREE.MeshBasicMaterial({ color: lane.universe.color, transparent: true, opacity: 0.82, blending: THREE.AdditiveBlending, depthWrite: false }),
+      );
+      const inner = new THREE.Mesh(
+        new THREE.RingGeometry(11.5 * S, 13.2 * S, 72),
+        new THREE.MeshBasicMaterial({ color: lane.universe.color, transparent: true, opacity: 0.14, side: THREE.DoubleSide, depthWrite: false }),
+      );
+      group.add(ring, inner); scene.add(group);
+      const div = document.createElement('div');
+      div.className = 'slabel jump-label';
+      div.innerHTML = `<i style="background:${lane.universe.color}"></i><b>Jump to ${esc(lane.universe.name)}</b><span>fly through the ring</span>`;
+      const label = new CSS2DObject(div); label.position.copy(group.position); label.position.y += 18 * S; scene.add(label);
+      return { ...lane, group, label };
+    });
+    let jumping = false;
     let tagAt = 0;
     const flight = {
       on: false,
@@ -811,6 +851,13 @@ const GalaxyScene = forwardRef<GalaxyHandle, Props>(function GalaxyScene({ galax
       for (const m of moons) solid(m.mesh.position, m.r + 0.4);
       solid(ORIGIN, SUN_R * 1.4);
 
+      // A lane crossing is a continuous flight transition: the page swaps the
+      // universe data, then remounts this scene with piloting still active.
+      if (!jumping) {
+        const lane = jumpLanes.find((x) => pos.distanceTo(x.group.position) < 11.5 * S);
+        if (lane) { jumping = true; cb.current.onUniverseJump?.(lane.universe.id); }
+      }
+
       // Chase camera, banking with the ship.
       const speedK = Math.min(1, flight.vel.length() / 600);
       const desired = tmp.set(0, 0.62 + speedK * 0.15, 2.7 + speedK * 1.4).applyQuaternion(q).add(pos);
@@ -855,7 +902,7 @@ const GalaxyScene = forwardRef<GalaxyHandle, Props>(function GalaxyScene({ galax
       // Engines and exhaust.
       const heat = Math.max(0.15, throttle) * (flight.boost ? 1 : 0.6);
       ship.engineMats.forEach((m) => m.color.setHSL(0.72 - heat * 0.2, 0.9, 0.6 + heat * 0.35));
-      ship.light.intensity = 0.3 + heat * 1.2;
+      ship.light.intensity = 0.16 + heat * 0.42;
       const emit = Math.round(heat * (flight.boost ? 9 : 4));
       for (const nz of ship.nozzles) {
         for (let e = 0; e < emit; e++) {
@@ -955,6 +1002,7 @@ const GalaxyScene = forwardRef<GalaxyHandle, Props>(function GalaxyScene({ galax
     const ease = (x: number) => 1 - Math.pow(1 - x, 3);
     const frame = () => {
       raf = requestAnimationFrame(frame);
+      clock.update();
       const dt = Math.min(0.05, clock.getDelta());
       time += reduced ? 0 : dt;
       starUniforms.uTime.value = time;
@@ -972,6 +1020,11 @@ const GalaxyScene = forwardRef<GalaxyHandle, Props>(function GalaxyScene({ galax
 
       if (flight.on) pilot(dt, time);
       beacon.update(time, camera.position.distanceTo(stationPos));
+      for (let i = 0; i < jumpLanes.length; i++) {
+        const lane = jumpLanes[i];
+        lane.group.rotation.z += dt * (i ? 0.11 : -0.11);
+        lane.label.visible = flight.on;
+      }
       if (time - tagAt > 0.3) {
         tagAt = time;
         const d = camera.position.distanceTo(stationPos);
@@ -1177,6 +1230,7 @@ const GalaxyScene = forwardRef<GalaxyHandle, Props>(function GalaxyScene({ galax
 
     return () => {
       cancelAnimationFrame(raf);
+      clock.dispose();
       window.removeEventListener('resize', onResize);
       labels.domElement.removeEventListener('pointerdown', onDown);
       labels.domElement.removeEventListener('pointerup', onUp);
@@ -1192,6 +1246,10 @@ const GalaxyScene = forwardRef<GalaxyHandle, Props>(function GalaxyScene({ galax
       el.removeChild(labels.domElement);
     };
   }, [galaxy]);
+
+  // Keep the simulation state declarative. This also covers a freshly loaded
+  // dynamic scene, where a parent-frame imperative call can arrive too early.
+  useEffect(() => { api.current.setFlying(flying); }, [flying, galaxy]);
 
   return <div ref={mount} style={{ position: 'absolute', inset: 0 }} />;
 });
