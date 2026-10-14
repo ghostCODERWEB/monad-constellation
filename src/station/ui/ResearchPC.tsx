@@ -131,8 +131,10 @@ export function ResearchPC({ engine }: { engine: Engine }) {
     askAgent(engine, text);
   };
 
-  // The terminal is the monitor's screen: a fixed 1280×720 page, scaled and moved every frame to
-  // sit exactly on the main monitor's projected corners, so the 3D bezel and keyboard frame it.
+  // The terminal is the monitor's screen: a fixed 1280×720 page mapped every frame onto the main monitor's
+  // four projected corners with a true perspective transform (a homography), so it sits on the glass even
+  // seen at an angle. The HUD layer is never allowed to scroll: focusing an input on the page would otherwise
+  // scroll it and slide the screen off the monitor.
   const screenRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     let raf = 0;
@@ -141,14 +143,14 @@ export function ResearchPC({ engine }: { engine: Engine }) {
       raf = requestAnimationFrame(loop);
       const el = screenRef.current, corners = mainScreenCorners(engine);
       if (!el || !corners) return;
+      const parent = el.offsetParent as HTMLElement | null;
+      if (parent && (parent.scrollTop || parent.scrollLeft)) { parent.scrollTop = 0; parent.scrollLeft = 0; }
       engine.camera.updateMatrixWorld();
       const cv = engine.renderer.domElement.getBoundingClientRect();
-      const par = (el.offsetParent as HTMLElement | null)?.getBoundingClientRect() ?? cv;
+      const par = parent?.getBoundingClientRect() ?? cv;
       const pts = corners.map((c) => { v.copy(c).project(engine.camera); return { x: (v.x * 0.5 + 0.5) * cv.width + cv.left - par.left, y: (0.5 - v.y * 0.5) * cv.height + cv.top - par.top, z: v.z }; });
-      if (pts.some((p) => p.z > 1)) { el.style.opacity = '0'; return; }
-      const [tl, tr, , bl] = pts;
-      const w = Math.hypot(tr.x - tl.x, tr.y - tl.y), h = Math.hypot(bl.x - tl.x, bl.y - tl.y);
-      el.style.transform = `translate(${tl.x}px, ${tl.y}px) scale(${w / 1280}, ${h / 720})`;
+      if (pts.some((p) => p.z > 1 || p.z < -1)) { el.style.opacity = '0'; return; }
+      el.style.transform = homography(1280, 720, pts);
       el.style.opacity = '1';
     };
     loop();
@@ -228,7 +230,7 @@ export function ResearchPC({ engine }: { engine: Engine }) {
                     <button onClick={() => pick({ type: 'planet', index: c.planet })}>
                       <b>${galaxy.planets[c.planet].symbol}</b>
                       <span className={c.severity}>{c.severity}</span>
-                      <em>{c.members.length} wallets · {(c.share * 100).toFixed(1)}% of supply · {c.kind === 'funded' ? `funded by ${c.funder?.name ?? 'one wallet'}` : 'trading ring'}</em>
+                      <em>{c.members.length} wallets · {(c.share * 100).toFixed(1)}% of supply · {c.kind === 'funded' ? `funded by ${c.funder?.name ?? 'one wallet'}` : c.kind === 'ring' ? 'transfer cycle' : 'transfer-connected'}</em>
                     </button>
                   </li>
                 ))}
@@ -269,4 +271,22 @@ export function ResearchPC({ engine }: { engine: Engine }) {
     </section>
     </div>
   );
+}
+
+/**
+ * CSS matrix3d that maps the rectangle (0,0)–(w,h) onto four screen points (TL, TR, BR, BL): the projective
+ * transform solved from the four correspondences, so an HTML page lands exactly on a 3D quad.
+ */
+function homography(w: number, h: number, q: { x: number; y: number }[]) {
+  const [p0, p1, p2, p3] = q;
+  // Square-to-quad (Heckbert): maps the unit square onto the quad.
+  const dx1 = p1.x - p2.x, dx2 = p3.x - p2.x, dx3 = p0.x - p1.x + p2.x - p3.x;
+  const dy1 = p1.y - p2.y, dy2 = p3.y - p2.y, dy3 = p0.y - p1.y + p2.y - p3.y;
+  const den = dx1 * dy2 - dx2 * dy1 || 1e-9;
+  const g = (dx3 * dy2 - dx2 * dy3) / den, hh = (dx1 * dy3 - dx3 * dy1) / den;
+  const a = p1.x - p0.x + g * p1.x, b = p3.x - p0.x + hh * p3.x, c = p0.x;
+  const d = p1.y - p0.y + g * p1.y, e = p3.y - p0.y + hh * p3.y, f = p0.y;
+  // Scale the unit square up to w × h first: divide the u and v columns.
+  const m = [a / w, d / w, 0, g / w, b / h, e / h, 0, hh / h, 0, 0, 1, 0, c, f, 0, 1];
+  return `matrix3d(${m.map((x) => +x.toFixed(10)).join(',')})`;
 }

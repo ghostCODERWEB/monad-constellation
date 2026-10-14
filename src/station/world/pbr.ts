@@ -109,12 +109,12 @@ export function recolouredPaint(hex: number) {
 
 // ---------- procedural helpers ----------
 
-function rng(seed: number) {
+export function rng(seed: number) {
   let s = seed;
   return () => ((s = (s * 16807) % 2147483647) / 2147483647);
 }
 
-function surface(n: number) {
+export function surface(n: number) {
   const c = document.createElement('canvas');
   c.width = c.height = n;
   return { c, g: c.getContext('2d')!, n };
@@ -141,7 +141,7 @@ export function normalFromHeight(h: HTMLCanvasElement, strength: number) {
   return out;
 }
 
-function toTexture(c: HTMLCanvasElement, srgb: boolean) {
+export function toTexture(c: HTMLCanvasElement, srgb: boolean) {
   const t = new THREE.CanvasTexture(c);
   t.wrapS = t.wrapT = THREE.RepeatWrapping;
   t.anisotropy = 16;

@@ -14,10 +14,19 @@ import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeom
 import { pbrSet, recolouredPaint, scaleUV } from '../world/pbr';
 import { addPanelMode, hotkey } from './panel';
 
-export interface Robot { talking: boolean; thinking: boolean }
+export interface Robot {
+  talking: boolean; thinking: boolean;
+  /** The player is typing a question: the robot leans in and listens. */
+  listening: boolean;
+  /** Camera framing while talking: 0 face, 1 upper body, 2 full figure. */
+  view: number;
+  /** A one-off reaction: 'nod' | 'wave' | 'alert'. */
+  react(kind: 'nod' | 'wave' | 'alert'): void;
+}
 
 // In the research module beside the workstation: the crew's research partner.
-const HOME = new THREE.Vector3(6.4, 0.0, -0.45);
+// Beside the entrance, clear of R-1 and the walkway into the room.
+const HOME = new THREE.Vector3(6.6, 0.0, 0.95);
 
 /** Nansen's animated mark, decoded into bitmaps; null until ready or where unsupported. */
 interface Gif { frames: ImageBitmap[]; times: number[]; length: number }
@@ -105,7 +114,8 @@ function canvasTex(w: number, h: number) {
 }
 
 export function installRobot(e: Engine) {
-  const robot: Robot = { talking: false, thinking: false };
+  let reaction: { kind: string; t: number } | null = null;
+  const robot: Robot = { talking: false, thinking: false, listening: false, view: 1, react: (kind) => { reaction = { kind, t: 0 }; } };
   if (!gif) loadGif('/brand/nansen-mark.gif');
   (e as unknown as { robot: Robot }).robot = robot;
 
@@ -156,22 +166,21 @@ export function installRobot(e: Engine) {
     const a = (i / 20) * Math.PI * 2, rx = 0.2 + 0.002, rz = 0.164 + 0.002;
     addBolt(body, new THREE.Vector3(Math.sin(a) * rx, -0.12 + 0.027, Math.cos(a) * rz), new THREE.Vector3(0, 1, 0));
   }
-  const emblem = canvasTex(256, 256);
-  // Emblem: a recessed bezel in brushed metal under a glass cover, over the live mark.
-  const bezel = new THREE.Mesh(R(new THREE.TorusGeometry(0.128, 0.011, 16, 64), 6, 1), metal);
-  bezel.position.set(0, 0.03, 0.168); body.add(bezel);
-  const chest = new THREE.Mesh(new THREE.CircleGeometry(0.119, 64), new THREE.MeshBasicMaterial({ map: emblem.tex, transparent: true }));
-  chest.position.set(0, 0.03, 0.168);
-  body.add(chest);
-  const chestGlass = new THREE.Mesh(new THREE.CircleGeometry(0.12, 64), new THREE.MeshPhysicalMaterial({ color: 0xffffff, transparent: true, opacity: 0.08, roughness: 0.03, clearcoat: 1, clearcoatRoughness: 0.02, depthWrite: false }));
-  chestGlass.position.set(0, 0.03, 0.172);
-  body.add(chestGlass);
-  const chestRim = new THREE.Mesh(new THREE.TorusGeometry(0.118, 0.006, 8, 64), glow);
-  chestRim.position.copy(chest.position);
-  body.add(chestRim);
-  for (let i = 0; i < 8; i++) { // bezel screws
-    const a = (i / 8) * Math.PI * 2 + 0.2;
-    addBolt(body, new THREE.Vector3(Math.sin(a) * 0.14, 0.03 + Math.cos(a) * 0.14, 0.166), new THREE.Vector3(0, 0, 1));
+  // Chest: a recessed status display behind glass (no logo; the Nansen mark lives on the crown).
+  const status = canvasTex(256, 160);
+  const bezel = new THREE.Mesh(new RoundedBoxGeometry(0.2, 0.13, 0.02, 4, 0.012), metal);
+  bezel.position.set(0, 0.04, 0.175); bezel.rotation.x = -0.05; body.add(bezel);
+  const chest = new THREE.Mesh(new THREE.PlaneGeometry(0.17, 0.106), new THREE.MeshBasicMaterial({ map: status.tex, toneMapped: false }));
+  chest.position.set(0, 0.04, 0.1865); chest.rotation.x = -0.05; body.add(chest);
+  const chestGlass = new THREE.Mesh(new THREE.PlaneGeometry(0.172, 0.108), new THREE.MeshPhysicalMaterial({ color: 0xffffff, transparent: true, opacity: 0.07, roughness: 0.03, clearcoat: 1, clearcoatRoughness: 0.02, depthWrite: false }));
+  chestGlass.position.set(0, 0.04, 0.188); chestGlass.rotation.x = -0.05; body.add(chestGlass);
+  for (const [dx, dy] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) addBolt(body, new THREE.Vector3(dx * 0.088, 0.04 + dy * 0.056, 0.178), new THREE.Vector3(0, 0, 1));
+  // Shoulder yoke and a glowing spine strip, for a more engineered silhouette.
+  for (const sx of [-1, 1]) {
+    const pauldron = new THREE.Mesh(R(new THREE.SphereGeometry(0.085, 32, 20, 0, Math.PI * 2, 0, Math.PI * 0.55), 3, 2), shell);
+    pauldron.position.set(sx * 0.215, 0.145, 0); pauldron.rotation.z = -sx * 0.7; pauldron.scale.set(1, 0.8, 1.05); body.add(pauldron);
+    const strip = new THREE.Mesh(new RoundedBoxGeometry(0.012, 0.16, 0.012, 2, 0.004), glow);
+    strip.position.set(sx * 0.165, 0.0, 0.12); strip.rotation.z = -sx * 0.18; body.add(strip);
   }
   // Nameplate and decals below the emblem, screen-printed (transparent ground).
   const decal = (lines: string[], w: number, h: number, size: number) => {
@@ -183,7 +192,7 @@ export function installRobot(e: Engine) {
     return new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshStandardMaterial({ map: t, transparent: true, roughness: 0.5, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2 }));
   };
   const nameplate = decal(['NANSEN AI', 'CREW UNIT NA-01'], 0.16, 0.05, 68);
-  nameplate.position.set(0, -0.085, 0.166); nameplate.rotation.x = 0.22; nameplate.scale.set(1, 1, 1);
+  nameplate.position.set(0, -0.075, 0.172); nameplate.rotation.x = 0.22; nameplate.scale.set(1, 1, 1);
   body.add(nameplate);
   const access = new THREE.Mesh(new RoundedBoxGeometry(0.075, 0.05, 0.008, 3, 0.004), metal); // access plate, left flank
   access.position.set(-0.19, 0.0, 0.07); access.rotation.y = -1.15; body.add(access);
@@ -226,13 +235,21 @@ export function installRobot(e: Engine) {
       addBolt(head, new THREE.Vector3(s * 0.2257, 0.36 + Math.cos(a) * 0.04, Math.sin(a) * 0.04), new THREE.Vector3(s, 0, 0));
     }
   }
-  const antenna = new THREE.Mesh(R(new THREE.CylinderGeometry(0.006, 0.006, 0.12, 12), 1, 2), metal);
-  antenna.position.set(0.06, 0.2, 0);
+  // The only Nansen mark on the body: a glass-covered disc on the crown, facing up.
+  const crownTex = canvasTex(256, 256);
+  const crownBezel = new THREE.Mesh(R(new THREE.TorusGeometry(0.062, 0.008, 14, 48), 6, 1), metal);
+  crownBezel.rotation.x = Math.PI / 2; crownBezel.position.y = 0.152; head.add(crownBezel);
+  const crown = new THREE.Mesh(new THREE.CircleGeometry(0.058, 48), new THREE.MeshBasicMaterial({ map: crownTex.tex, transparent: true, toneMapped: false }));
+  crown.rotation.x = -Math.PI / 2; crown.position.y = 0.157; head.add(crown);
+  const crownGlass = new THREE.Mesh(new THREE.CircleGeometry(0.059, 48), new THREE.MeshPhysicalMaterial({ color: 0xffffff, transparent: true, opacity: 0.08, roughness: 0.03, clearcoat: 1, depthWrite: false }));
+  crownGlass.rotation.x = -Math.PI / 2; crownGlass.position.y = 0.1585; head.add(crownGlass);
+  const antenna = new THREE.Mesh(R(new THREE.CylinderGeometry(0.005, 0.005, 0.1, 12), 1, 2), metal);
+  antenna.position.set(-0.11, 0.15, -0.03); antenna.rotation.z = 0.25;
   head.add(antenna);
   const base = new THREE.Mesh(R(new THREE.CylinderGeometry(0.016, 0.02, 0.02, 20), 2, 1), dark);
-  base.position.set(0.06, 0.148, 0); head.add(base);
+  base.position.set(-0.099, 0.108, -0.03); head.add(base);
   const tip = new THREE.Mesh(new THREE.SphereGeometry(0.018, 20, 14), glow);
-  tip.position.set(0.06, 0.265, 0);
+  tip.position.set(-0.134, 0.248, -0.03);
   head.add(tip);
 
   // Arms: shoulder sockets with collars, painted upper arms, carbon elbows, gripping hands.
@@ -303,6 +320,22 @@ export function installRobot(e: Engine) {
   let blink = 0, nextBlink = 2, redraw = 0;
   const toPlayer = new THREE.Vector3();
   const lookAt = new THREE.Vector2();
+  const drawStatus = (t: number) => {
+    const g = status.g;
+    g.fillStyle = '#031210'; g.fillRect(0, 0, 256, 160);
+    g.fillStyle = 'rgba(0,255,167,0.05)'; for (let y = 0; y < 160; y += 4) g.fillRect(0, y, 256, 1);
+    g.fillStyle = NANSEN_GREEN; g.font = '700 17px "Helvetica Neue", Arial, sans-serif'; g.textAlign = 'left';
+    g.fillText(robot.talking ? 'ANSWERING' : robot.thinking ? 'QUERYING NANSEN' : robot.listening ? 'LISTENING' : 'STANDING BY', 14, 26);
+    g.fillStyle = 'rgba(0,255,167,0.55)'; g.font = '600 11px monospace'; g.fillText('MONAD · SMART MONEY LINK', 14, 44);
+    const bars = 24;
+    for (let i = 0; i < bars; i++) {
+      const live = robot.talking ? 0.35 + 0.65 * Math.abs(Math.sin(t * 9 + i * 1.3) * Math.sin(t * 3.1 + i * 0.4)) : robot.thinking ? 0.2 + 0.5 * Math.max(0, Math.sin(t * 6 - i * 0.5)) : robot.listening ? 0.15 + 0.25 * Math.abs(Math.sin(t * 2.5 + i * 0.7)) : 0.08 + 0.05 * Math.sin(t * 1.4 + i);
+      const h = 14 + live * 70;
+      g.fillStyle = i % 6 === 0 ? '#836ef9' : NANSEN_GREEN;
+      g.fillRect(14 + i * 9.6, 148 - h, 6, h);
+    }
+    status.tex.needsUpdate = true;
+  };
   const drawFace = (t: number) => {
     const g = face.g;
     g.fillStyle = '#04110f'; g.fillRect(0, 0, 256, 128);
@@ -310,10 +343,13 @@ export function installRobot(e: Engine) {
     g.fillStyle = 'rgba(0,255,167,0.05)';
     for (let y = 0; y < 128; y += 4) g.fillRect(0, y, 256, 1);
     g.fillStyle = NANSEN_GREEN; g.shadowColor = NANSEN_GREEN; g.shadowBlur = 14;
-    const eyeH = blink > 0 ? 3 : robot.thinking ? 10 : 22;
+    const happy = reaction?.kind === 'wave' || reaction?.kind === 'nod';
+    const eyeH = blink > 0 ? 3 : robot.thinking ? 10 : robot.listening ? 28 : 22;
     for (const s of [-1, 1]) {
-      const x = 128 + s * 46 + lookAt.x * 14, y = 52 - lookAt.y * 8;
-      g.beginPath(); g.ellipse(x, y, 16, eyeH / 2 + 2, 0, 0, Math.PI * 2); g.fill();
+      const x = 128 + s * 46 + lookAt.x * 14 + (robot.thinking ? Math.sin(t * 2.2) * 8 : 0), y = 52 - lookAt.y * 8;
+      if (happy) { g.beginPath(); g.arc(x, y + 6, 15, 1.15 * Math.PI, 1.85 * Math.PI); g.lineWidth = 6; g.strokeStyle = NANSEN_GREEN; g.stroke(); }
+      else if (reaction?.kind === 'alert') { g.beginPath(); g.ellipse(x, y, 19, 19, 0, 0, Math.PI * 2); g.fill(); }
+      else { g.beginPath(); g.ellipse(x, y, 16, eyeH / 2 + 2, 0, 0, Math.PI * 2); g.fill(); }
     }
     if (robot.talking) {
       for (let i = 0; i < 7; i++) {
@@ -357,6 +393,7 @@ export function installRobot(e: Engine) {
         if (look.dot(centre.clone().sub(w.pos).normalize()) > 0.8) {
           greeted = true;
           e.say('NANSEN AI: Hi! I answer with Nansen data on Monad. Press E to talk, or N from anywhere.', 5);
+          robot.react('wave');
         }
       }
     }
@@ -371,13 +408,32 @@ export function installRobot(e: Engine) {
     group.rotation.y += (((yaw - group.rotation.y + Math.PI * 3) % (Math.PI * 2)) - Math.PI) * Math.min(1, dt * 2);
     const local = toPlayer.clone().applyQuaternion(group.quaternion.clone().invert()).normalize();
     lookAt.set(THREE.MathUtils.clamp(local.x * 2, -1, 1), THREE.MathUtils.clamp(local.y * 2, -1, 1));
-    head.rotation.x = THREE.MathUtils.lerp(head.rotation.x, -lookAt.y * 0.3, dt * 3);
+    // The head leads the look; the body follows a moment later.
+    head.rotation.x = THREE.MathUtils.lerp(head.rotation.x, -lookAt.y * 0.3 + (robot.listening ? 0.12 : 0) + (robot.thinking ? -0.08 : 0), dt * 4);
+    head.rotation.y = THREE.MathUtils.lerp(head.rotation.y, THREE.MathUtils.clamp(lookAt.x * 0.35, -0.4, 0.4) + (robot.thinking ? Math.sin(t * 1.3) * 0.25 : 0), dt * 5);
+    head.rotation.z = THREE.MathUtils.lerp(head.rotation.z, robot.listening ? 0.16 : 0, dt * 4);
+    if (reaction) {
+      reaction.t += dt;
+      const k = reaction.t;
+      if (reaction.kind === 'nod') head.rotation.x += Math.sin(k * 11) * 0.22 * Math.max(0, 1 - k / 0.9);
+      if (reaction.kind === 'alert') body.rotation.x = Math.max(0, 0.18 * (1 - k / 0.5));
+      if (k > (reaction.kind === 'wave' ? 2.4 : 1)) reaction = null;
+    }
 
     body.position.y = Math.sin(t * 1.1) * 0.04;
     body.rotation.z = Math.sin(t * 0.7) * 0.05;
     const busy = robot.talking ? 1 : robot.thinking ? 0.5 : 0;
+    if (reaction?.kind === 'wave') {
+      // Right arm up and waving.
+      arms[1].rotation.z = THREE.MathUtils.lerp(arms[1].rotation.z, 2.5 + Math.sin(reaction.t * 9) * 0.25, dt * 8);
+      arms[1].rotation.x = 0;
+    } else {
+      arms[1].rotation.z = THREE.MathUtils.lerp(arms[1].rotation.z, 0.25, dt * 6);
+    }
     arms[0].rotation.x = Math.sin(t * (busy ? 3.2 : 0.9)) * (0.12 + busy * 0.35);
-    arms[1].rotation.x = Math.sin(t * (busy ? 2.7 : 0.8) + 1.4) * (0.12 + busy * 0.3);
+    if (reaction?.kind !== 'wave') arms[1].rotation.x = Math.sin(t * (busy ? 2.7 : 0.8) + 1.4) * (0.12 + busy * 0.3);
+    // Gesturing in rhythm with the answer: a small lift of both forearms on each beat.
+    if (robot.talking) { const beat = Math.max(0, Math.sin(t * 5.2)); arms[0].rotation.z = -0.25 - beat * 0.35; if (reaction?.kind !== 'wave') arms[1].rotation.z = 0.25 + beat * 0.35; } else arms[0].rotation.z = THREE.MathUtils.lerp(arms[0].rotation.z, -0.25, dt * 6);
     ring.scale.setScalar(1 + Math.sin(t * 6) * 0.04);
     (jet.material as THREE.MeshBasicMaterial).opacity = 0.12 + Math.abs(Math.sin(t * 9)) * 0.08 + Math.min(0.5, drift.length() * 2);
     hologram.rotation.y = t * 0.8;
@@ -391,7 +447,8 @@ export function installRobot(e: Engine) {
     redraw -= dt;
     if (redraw <= 0) {
       redraw = 1 / 24;
-      drawMark(emblem.g, 256, t, true); emblem.tex.needsUpdate = true;
+      drawMark(crownTex.g, 256, t, true); crownTex.tex.needsUpdate = true;
+      drawStatus(t);
       drawMark(holo.g, 256, t * (robot.thinking ? 3 : 1) + 1.3, false); holo.tex.needsUpdate = true;
       drawFace(t);
     }
@@ -402,11 +459,23 @@ export function installRobot(e: Engine) {
   const cleanup = addPanelMode(e, 'agent', 'Nansen AI', () => {
     // Face the robot from in front (the module is narrow, so the view is fixed, not along its heading),
     // aiming to its right so it sits in the left of the frame, clear of the chat panel.
-    eye.copy(group.position).add(new THREE.Vector3(0, 0.2, 1.1));
-    return { eye, target: group.position.clone().add(new THREE.Vector3(0.4, 0.12, 0)) };
+    const V = [
+      { d: 0.9, h: 0.37, aim: 0.36, fov: 42 },   // face
+      { d: 1.05, h: 0.22, aim: 0.14, fov: 50 },   // upper body
+      { d: 1.9, h: 0.15, aim: 0.0, fov: 54 },     // full figure
+    ][robot.view] ?? { d: 1.05, h: 0.22, aim: 0.14, fov: 50 };
+    // A slow breathing drift keeps the shot alive; the robot sits left of centre, clear of the chat panel.
+    const drift = Math.sin(e.t * 0.35) * 0.04;
+    eye.copy(group.position).add(new THREE.Vector3(drift, V.h, V.d));
+    // Frame the robot in the left half whatever the window shape: shift the aim by a share of the half-width at its distance.
+    const halfW = V.d * Math.tan(THREE.MathUtils.degToRad(V.fov) / 2) * e.camera.aspect;
+    return { eye, target: group.position.clone().add(new THREE.Vector3(halfW * 0.5 + drift, V.aim, 0)), fov: V.fov };
   });
   hotkey(e, 'KeyN', 'agent');
+  // 1 / 2 / 3 reframe the shot while the chat is open.
+  const onView = (ev: KeyboardEvent) => { if (e.mode.id === 'agent' && ev.altKey && /^Digit[123]$/.test(ev.code)) { robot.view = Number(ev.code.slice(5)) - 1; ev.preventDefault(); } };
+  window.addEventListener('keydown', onView);
   e.interactions.add({ id: 'robot', label: 'talk to Nansen AI', position: group.position, reach: 2.6, use: () => e.setMode('agent') });
   e.log.add('robot-boot', 'system', 'Nansen AI aboard', 'The crew robot answers through Nansen’s Research Agent. Press N anywhere, or float up to it and press E.');
-  return cleanup;
+  return () => { cleanup(); window.removeEventListener('keydown', onView); };
 }

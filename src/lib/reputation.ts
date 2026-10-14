@@ -2,7 +2,7 @@
 // what it has done. Published on Monad by MonadReputation so any contract can
 // ask the chain whether a wallet has a track record.
 //
-// Every point is attributable. Methodology "nansen-rep-v1":
+// Every point is attributable. Methodology "nansen-rep-v2":
 //   base       100   everyone starts somewhere
 //   profit    ±400   realised + open PnL from tgm/pnl-leaderboard, log-scaled;
 //                    a loser loses up to 150
@@ -10,8 +10,10 @@
 //                    trader 110, named 90, whale 70
 //   breadth   0–100  tokens it holds or trades in this galaxy, past the first
 //   size      0–150  holdings plus today's volume, log-scaled
-//   insider  −300    member of an insider cluster (shared first funder or
-//                    a transfer ring among top holders); −200 for the funder
+//   insider  −300    member of an insider cluster (shared first funder, or a
+//                    directed transfer cycle among top holders); −200 for the
+//                    funder. Holders merely connected by transfers (no cycle)
+//                    are a relationship, not a penalty.
 // Contracts, pools, routers and exchanges are infrastructure, not people,
 // and are not scored.
 import { keccak256, toUtf8Bytes } from 'ethers';
@@ -20,7 +22,7 @@ import { getGalaxy, type StarKind } from './galaxy';
 import { getClusters } from './clusters';
 import type { UniverseId } from './universes';
 
-export const METHODOLOGY = 'nansen-rep-v1';
+export const METHODOLOGY = 'nansen-rep-v2';
 
 export { FLAG, FLAG_NAMES, type Reputation, type ReputationSet, type Tier } from './repFlags';
 import { FLAG, type Reputation, type ReputationSet, type Tier } from './repFlags';
@@ -38,6 +40,7 @@ async function build(universe: UniverseId): Promise<ReputationSet> {
   const insiders = new Set<number>();
   const funders = new Set<number>();
   for (const c of clusters.clusters) {
+    if (c.kind === 'transfer') continue;
     c.members.forEach((m) => insiders.add(m));
     if (c.funder?.star != null && !c.members.includes(c.funder.star)) funders.add(c.funder.star);
   }

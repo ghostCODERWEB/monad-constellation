@@ -161,13 +161,7 @@ export function buildWorkstation(anchor: THREE.Vector3) {
   run(new THREE.Vector3(0.62, 0.35, 0.12), new THREE.Vector3(0.45, 0.1, 0.07), new THREE.Vector3(0.25, -0.015, 0.07), 2);
   run(new THREE.Vector3(0.0, 0.01, 0.23), new THREE.Vector3(-0.05, 0.0, 0.14), new THREE.Vector3(-0.1, -0.012, 0.07), 1);
 
-  // Foot restraints bolted to the floor below, with rubber straps.
-  for (const sx of [-0.22, 0.22]) {
-    place(box(0.3, 0.02, 0.1, alu), sx, -1.24, 0.4);
-    const strap = new THREE.Mesh(new THREE.TorusGeometry(0.075, 0.012, 8, 20, Math.PI), rubber);
-    strap.rotation.z = 0; strap.position.set(0, 0.01, 0); strap.rotation.y = Math.PI / 2;
-    const holder = new THREE.Group(); holder.add(strap); place(holder, sx, -1.23, 0.4);
-  }
+  // (No foot restraints: the station spins for gravity, so people stand at the desk on the deck.)
   // A work light bar over the monitors.
   const bar = new THREE.Mesh(new RoundedBoxGeometry(0.7, 0.02, 0.04, 3, 0.008), new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xfff3dd, emissiveIntensity: 1.1 }));
   place(bar, 0, 0.95, 0.09);

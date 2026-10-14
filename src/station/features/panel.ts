@@ -5,10 +5,11 @@
 import * as THREE from 'three';
 import type { Engine } from '../engine';
 
-export function addPanelMode(e: Engine, id: string, title: string, view: () => { eye: THREE.Vector3; target: THREE.Vector3; fov?: number }) {
+export function addPanelMode(e: Engine, id: string, title: string, view: () => { eye: THREE.Vector3; target: THREE.Vector3; fov?: number; near?: number }, onEscape?: () => boolean) {
   const from = new THREE.Vector3(), fromQ = new THREE.Quaternion();
   const toQ = new THREE.Quaternion(), m = new THREE.Matrix4();
   let k = 0, fov0 = e.camera.fov;
+  const near0 = e.camera.near;
   e.addMode({
     id, title, eExits: false,
     enter: () => {
@@ -19,10 +20,13 @@ export function addPanelMode(e: Engine, id: string, title: string, view: () => {
     exit: () => {
       e.input.suspend(false);
       e.hands.group.visible = true;
+      e.camera.near = near0;
+      e.camera.updateProjectionMatrix();
       if (e.camera.fov !== fov0) { e.camera.fov = fov0; e.camera.updateProjectionMatrix(); }
     },
     update: (dt) => {
-      const { eye, target, fov } = view();
+      const { eye, target, fov, near } = view();
+      if (near !== undefined) e.camera.near = near;
       k = Math.min(1, k + dt * 1.6);
       const s = k * k * (3 - 2 * k);
       m.lookAt(eye, target, new THREE.Vector3(0, 1, 0));
@@ -33,7 +37,7 @@ export function addPanelMode(e: Engine, id: string, title: string, view: () => {
     },
   });
   // Esc reaches the DOM, not the suspended 3D input: close from here.
-  const onKey = (ev: KeyboardEvent) => { if (ev.key === 'Escape' && e.mode.id === id) { ev.preventDefault(); e.setMode('walk'); } };
+  const onKey = (ev: KeyboardEvent) => { if (ev.key === 'Escape' && e.mode.id === id) { ev.preventDefault(); if (!onEscape?.()) e.setMode('walk'); } };
   window.addEventListener('keydown', onKey);
   return () => window.removeEventListener('keydown', onKey);
 }

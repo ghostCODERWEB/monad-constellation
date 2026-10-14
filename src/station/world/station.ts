@@ -1,9 +1,12 @@
-// The station: modules, racks, rails, hatches, windows, exterior. Units are
-// metres; +Y points away from Earth. Interior collision comes from the same
-// numbers that place the walls, so what you see is what you bump into.
+// The station: modules, racks, doors, windows, exterior. Units are metres;
+// +Y points away from Earth. The station spins for gravity, so every pressurised
+// room shares one deck (DECK) and every doorway starts at that deck: walking
+// height, door openings, collision and the floor meshes all come from the same
+// numbers, so what you see is what you walk on and bump into.
 //
-//   hangar ── glass walkway ── research room ── observation room
-//   x −16.4…0.4      0.4…2.8        2.8…11.2        11.6…17.6
+//   hangar ─[H-1]─ glass walkway ─[R-1]─ research room ─[R-2]─ observation room
+//   x −16.4…0.4       0.6…5.4            5.6…11.2               11.6…17.6
+//   (each doorway's sliding leaf runs in the gap between the two walls it joins)
 import * as THREE from 'three';
 import { Space, box, cyl } from '../core/space';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
@@ -11,6 +14,30 @@ import { labelTexture, panelBump, panelTexture, patchTexture, rackTexture, type 
 import { RACK_MODULES, blanketMaterial, glassSmudge, lightDiffuser, pbrSet, plateTexture, rackModule, recolouredPaint, scaleUV, tileUV } from './pbr';
 import { buildWorkstation } from './workstation';
 import { mergeStatic } from './mergeStatic';
+import { constructionMaterial, deckPanels, hazardStripes, paintedPanels } from './construction';
+import type { Volume } from '../core/space';
+
+/** The one deck every room shares. Floors are here; a standing eye is 1.55 m above. */
+export const DECK = -1.5;
+/** Clear doorway opening: 1.0 m wide, 2.05 m tall, from the deck. */
+export const DOOR_W = 1.0, DOOR_H = 2.05;
+
+/** A sliding door between two rooms. `doors.ts` opens it as people approach unless it is locked. */
+export interface Hatch {
+  id: string;
+  /** Centre of the opening at deck height. */
+  center: THREE.Vector3;
+  leaf: THREE.Object3D;
+  /** Where the leaf sits shut, and the direction it slides to open. */
+  shut: THREE.Vector3; slide: THREE.Vector3; travel: number;
+  /** The doorway's collision volume: closed while the leaf is not fully open. */
+  volume: Volume;
+  lamp: THREE.MeshStandardMaterial;
+  /** 0 = shut, 1 = open. */
+  open: number;
+  /** Locked shut (the hangar door while the bay is open to space). */
+  locked: boolean;
+}
 
 export interface Rail { a: THREE.Vector3; b: THREE.Vector3 }
 
@@ -32,12 +59,16 @@ export interface Station {
   anchors: Anchors;
   /** The hangar doors animate (they live in the bay's frame). */
   doors: { hangarLeft: THREE.Object3D; hangarRight: THREE.Object3D };
+  /** Sliding pressure doors between rooms: H-1 (hangar), R-1 (walkway–research), R-2 (research–observation). */
+  hatches: Hatch[];
+  /** The bay control screen by H-1: redrawn with the bay's real state. */
+  bayScreen: { draw(lines: string[], tone: 'ok' | 'warn' | 'alert'): void };
   /** The pressure hull seen from outside: hidden while the camera is aboard, or its end caps would wall off every hatch. */
   hull: THREE.Group;
   /** Spots where props can be placed (wall position + inward normal). */
   wallSpots: { zone: string; pos: THREE.Vector3; normal: THREE.Vector3 }[];
   glass: THREE.Material;
-  /** Floor height under a point (world x, z), for walking: ramps and steps between the rooms, the hangar gangway and cradle. */
+  /** Floor height under a point (world x, z), for walking. One shared deck: no hidden ramps or steps. */
   groundAt(x: number, z: number): number;
 }
 
@@ -72,6 +103,12 @@ export function buildStation(): Station {
   const hubRail = pbrSet('brushed-aluminium', { color: 0xe3b94a, normal: 0.6, roughness: 0.85, clearcoat: 0.3 });
   const hubGrip = pbrSet('rubber', { color: 0x2b2c31, normal: 1.2 });
   const hubFloor = pbrSet('diamond-plate', { color: 0xc9ccd2, normal: 0.9 });
+  // Decks are coated structural plates, walls stay quilted blankets: two materials, two jobs.
+  const deckMat = constructionMaterial(deckPanels(0x70747c, 11));
+  const hangarDeck = constructionMaterial(deckPanels(0x5b5f66, 17), { clearcoat: 0.15 });
+  const hangarWall = constructionMaterial(paintedPanels(0xc2c6cb, 21));
+  const hangarCeil = constructionMaterial(paintedPanels(0x9ca1a8, 23));
+  const hazard = constructionMaterial(hazardStripes(31));
   const hubGlass = new THREE.MeshPhysicalMaterial({
     color: 0xc4dcff, transparent: true, opacity: 0.1, roughness: 1, roughnessMap: glassSmudge(), metalness: 0,
     clearcoat: 1, clearcoatRoughness: 0.03, ior: 1.5, specularIntensity: 1, depthWrite: false, side: THREE.DoubleSide,
@@ -204,7 +241,7 @@ export function buildStation(): Station {
       [V(cx, 0, s), V(0, 0, -1), V(-1, 0, 0)],
     ];
     walls.forEach(([c, n, uAxis], wi) => {
-      face(c, n, uAxis, len, s * 2, undefined, wm);
+      face(c, n, uAxis, len, s * 2, undefined, P && wi === 0 ? deckMat : wm);
       if (opts.racks === false) return;
       // The racks stand on the two side walls only; floor and ceiling stay clear for the light panels and air ducts.
       if (P && (wi === 0 || wi === 1)) return;
@@ -336,291 +373,275 @@ export function buildStation(): Station {
     g.rotateZ((Math.sin(c.y * 7.3 + c.z) * 0.06));
     add(g);
   };
-  // ---------- doorways and modules ----------
-  const door = (zone: string, axis: 'x' | 'z', a: number, b: number, half: number) => {
-    // The player's centre must stay a body-radius inside a volume, so a doorway volume has to reach
-    // well into both rooms (at least two radii of overlap) or the hatch is impassable.
-    const lo = a - 0.7, hi = b + 0.7;
-    space.add(axis === 'x' ? box(`${zone}-door`, zone, [lo, -half, -half], [hi, half, half]) : box(`${zone}-door`, zone, [-half, -half, lo], [half, half, hi]));
-    // The sleeve through the wall: four short plates, so no gap shows.
-    const len = b - a, mid = (a + b) / 2;
-    const along = axis === 'x' ? V(1, 0, 0) : V(0, 0, 1);
-    const sides: [THREE.Vector3, THREE.Vector3][] = axis === 'x'
-      ? [[V(mid, half, 0), V(0, -1, 0)], [V(mid, -half, 0), V(0, 1, 0)], [V(mid, 0, half), V(0, 0, -1)], [V(mid, 0, -half), V(0, 0, 1)]]
-      : [[V(0, half, mid), V(0, -1, 0)], [V(0, -half, mid), V(0, 1, 0)], [V(half, 0, mid), V(-1, 0, 0)], [V(-half, 0, mid), V(1, 0, 0)]];
-    for (const [c, n] of sides) {
-      const u = along.clone();
-      const v = new THREE.Vector3().crossVectors(n, u).normalize();
-      const p = plane(len, half * 2, frameMat);
-      p.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(u, v, n));
-      p.position.copy(c);
-      add(p);
+  // ---------- doorways ----------
+  // Every doorway sits in the gap between the two walls it joins: an opening 1.0 × 2.05 m from the deck,
+  // a lined reveal through the wall pair, a flush threshold plate, raised casings on both faces with a
+  // label and a status lamp, and a sliding leaf with a vision panel that runs into a pocket in the gap.
+  const hatches: Hatch[] = [];
+  const leafPaint = constructionMaterial(paintedPanels(0xd3d6da, 41));
+  const sealMat = pbrSet('rubber', { color: 0x1b1d21, normal: 1.3 });
+  const doorway = (id: string, zone: string, xa: number, xb: number, label: string) => {
+    const volume = box(`${id} doorway`, zone, [xa - 0.7, DECK, -DOOR_W / 2], [xb + 0.7, DECK + DOOR_H, DOOR_W / 2]);
+    volume.closed = true;
+    space.add(volume);
+    const mid = (xa + xb) / 2, gap = xb - xa, cy = DECK + DOOR_H / 2;
+    // Reveal through the wall pair and a flush threshold.
+    for (const sz of [-1, 1]) { const j = boxPBR(gap, DOOR_H, 0.03, hubFrame, 0.4); j.position.set(mid, cy, sz * (DOOR_W / 2 + 0.015)); add(j); }
+    const head = boxPBR(gap, 0.03, DOOR_W, hubFrame, 0.4); head.position.set(mid, DECK + DOOR_H + 0.015, 0); add(head);
+    const sill = boxPBR(gap + 0.26, 0.012, DOOR_W, hubFloor, 0.8); sill.position.set(mid, DECK + 0.006, 0); add(sill);
+    const lamp = new THREE.MeshStandardMaterial({ color: 0x101010, emissive: 0x35ff9b, emissiveIntensity: 1.2, roughness: 0.4 });
+    for (const [x, nx] of [[xa, -1], [xb, 1]] as const) {
+      const t = 0.09, d = 0.05;
+      for (const [z, y, w, h] of [[-(DOOR_W / 2 + t / 2), cy + t / 2, t, DOOR_H + t], [DOOR_W / 2 + t / 2, cy + t / 2, t, DOOR_H + t], [0, DECK + DOOR_H + t / 2, DOOR_W + 2 * t, t]] as const) {
+        const c = boxPBR(d, h, w, hubFrame, 0.4); c.position.set(x + nx * d / 2, y, z); add(c);
+      }
+      const tag = new THREE.Mesh(new THREE.PlaneGeometry(0.66, 0.09), new THREE.MeshStandardMaterial({ map: labelTexture([label], { bg: '#facc15', fg: '#111', w: 512, h: 70, font: 30 }), roughness: 0.6 }));
+      tag.rotation.y = nx > 0 ? Math.PI / 2 : -Math.PI / 2; tag.position.set(x + nx * (d + 0.003), DECK + DOOR_H + 0.22, 0); add(tag);
+      const lmp = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.02, 20), lamp);
+      lmp.rotation.z = Math.PI / 2; lmp.position.set(x + nx * (d + 0.01), DECK + DOOR_H + 0.22, 0.45); add(lmp);
+      // Door control at hand height beside the opening.
+      const pad = boxPBR(0.03, 0.16, 0.1, hubFrame, 0.2); pad.position.set(x + nx * 0.015, DECK + 1.1, -0.68); add(pad);
+      const btn = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.022, 0.012, 20), lamp); btn.rotation.z = Math.PI / 2; btn.position.set(x + nx * 0.035, DECK + 1.12, -0.68); add(btn);
     }
+    // The leaf: four panels round a vision window, a rubber seal on the closing edge, recessed pulls.
+    const leaf = new THREE.Group();
+    const LW = DOOR_W + 0.08, LH = DOOR_H + 0.06, LT = 0.04;
+    const wz0 = -0.13, wz1 = 0.13, wy0 = 0.315, wy1 = 0.735; // window, relative to the leaf centre
+    const part = (z0: number, z1: number, y0: number, y1: number) => { const b = boxPBR(LT, y1 - y0, z1 - z0, leafPaint, 2.4); b.position.set(0, (y0 + y1) / 2, (z0 + z1) / 2); leaf.add(b); };
+    part(-LW / 2, LW / 2, -LH / 2, wy0); part(-LW / 2, LW / 2, wy1, LH / 2); part(-LW / 2, wz0, wy0, wy1); part(wz1, LW / 2, wy0, wy1);
+    const pane = new THREE.Mesh(new THREE.PlaneGeometry(wz1 - wz0, wy1 - wy0), hubGlass); pane.rotation.y = Math.PI / 2; pane.position.set(0, (wy0 + wy1) / 2, 0); leaf.add(pane);
+    for (const [z, y, w, h] of [[0, wy0, wz1 - wz0 + 0.02, 0.01], [0, wy1, wz1 - wz0 + 0.02, 0.01], [wz0, (wy0 + wy1) / 2, 0.01, wy1 - wy0], [wz1, (wy0 + wy1) / 2, 0.01, wy1 - wy0]] as const) {
+      const g = boxPBR(LT + 0.012, h, w, sealMat, 0.2); g.position.set(0, y, z); leaf.add(g);
+    }
+    const seal = boxPBR(LT + 0.01, LH, 0.03, sealMat, 0.2); seal.position.set(0, 0, -LW / 2 + 0.015); leaf.add(seal);
+    for (const sx of [-1, 1]) { const pull = boxPBR(0.012, 0.2, 0.05, darkMat, 0.2); pull.position.set(sx * (LT / 2 + 0.004), -0.02, -LW / 2 + 0.16); leaf.add(pull); }
+    leaf.position.set(mid, cy + 0.03, 0);
+    leaf.userData.keep = true;
+    add(leaf);
+    const h: Hatch = { id, center: V(mid, DECK, 0), leaf, shut: leaf.position.clone(), slide: V(0, 0, 1), travel: LW, volume, lamp, open: 0, locked: false };
+    hatches.push(h);
+    return h;
   };
+  /** The door opening as a rect in an end wall's (u, v) frame, for a wall centred at height cy. */
+  const doorRect = (cy: number): { r: [number, number, number, number]; open: boolean } => ({ r: [-DOOR_W / 2, DECK - cy, DOOR_W / 2, DECK + DOOR_H - cy], open: true });
 
-  // Research room, the middle of the line. Its west end opens onto the glass walkway to the hangar.
-  space.add(box('Walkway door', 'Research module', [1.7, -0.95, -0.95], [4.1, 0.95, 0.95]));
-  hatch(V(2.8, 0, 0), V(1, 0, 0), 0.95, 'HATCH R-1 · WALKWAY', hubFrame);
-  moduleX('Research module', 2.8, 11.2, 1.5, { seed: 1, pbr: true, clear: [7.4, 9.0] });
-  face(V(2.8, 0, 0), V(1, 0, 0), V(0, 0, -1), 3, 3, 0.95, hubWall);
-  face(V(11.2, 0, 0), V(-1, 0, 0), V(0, 0, 1), 3, 3, 0.95, hubWall);
+  // ---------- research room ----------
+  // A compact 5.6 m lab: rack walls, the workstation and the robot's post. The glass walkway makes up the rest.
+  const RX0 = 5.6;
+  moduleX('Research module', RX0, 11.2, 1.5, { seed: 1, pbr: true, clear: [7.4, 9.0] });
+  // End walls run 5 cm below the deck so the door openings sit inside them.
+  windowFace(V(RX0, -0.025, 0), V(1, 0, 0), V(0, 0, -1), 3, 3.05, [doorRect(-0.025)], hubWall);
+  windowFace(V(11.2, -0.025, 0), V(-1, 0, 0), V(0, 0, 1), 3, 3.05, [doorRect(-0.025)], hubWall);
   add(buildWorkstation(V(8.2, -0.25, -1.5)));
-  // Emergency kit by the walkway hatch: a portable fire extinguisher on its bracket, with a placard.
+  // Emergency kit by the walkway door: a portable extinguisher on its bracket, with a placard.
   {
     const ex = new THREE.Group();
     ex.add(new THREE.Mesh(new THREE.CapsuleGeometry(0.055, 0.3, 8, 24), hubExt));
     const head = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.04, 0.05, 16), hubFrame); head.position.y = 0.22; ex.add(head);
     for (const y of [-0.08, 0.1]) { const strap = new THREE.Mesh(new THREE.TorusGeometry(0.058, 0.007, 8, 24), velcroMat); strap.position.y = y; strap.rotation.x = Math.PI / 2; ex.add(strap); }
-    ex.position.set(2.95, -0.1, 1.28);
+    ex.position.set(RX0 + 0.15, DECK + 1.0, 1.2);
     add(ex);
     const placard = new THREE.Mesh(new THREE.PlaneGeometry(0.2, 0.12), new THREE.MeshStandardMaterial({ map: plateTexture(['PFE', 'CO₂ · 2 kg'], { bg: '#f5f5f5', w: 256, h: 160, font: 54 }), roughness: 0.5 }));
-    placard.rotation.y = Math.PI / 2; placard.position.set(2.82, 0.32, 1.28); add(placard);
+    placard.rotation.y = Math.PI / 2; placard.position.set(RX0 + 0.02, DECK + 1.45, 1.2); add(placard);
   }
+  doorway('R-1', 'Research module', RX0 - 0.2, RX0, 'R-1 · WALKWAY');
+  doorway('R-2', 'Observation module', 11.2, 11.6, 'R-2 · OBSERVATION');
 
-  // Observation module (east of research): bigger, with a great round window.
-  door('Observation module', 'x', 11.0, 11.8, 0.95);
-  hatch(V(11.2, 0, 0), V(1, 0, 0), 0.95, 'HATCH R-2 · OBSERVATION', hubFrame);
+  // ---------- observation room ----------
+  // A larger module on the same deck. A walk-on glass panel in the deck looks straight down at Earth through a
+  // second pane in the hull below; the great window is centred at eye height, clear of the deck.
   const OS = 2.2;
-  space.add(box('Observation module', 'Observation module', [11.6, -OS, -OS], [17.6, OS, OS]));
+  const WIN_Y = 0.35, WIN_R = 1.6;
+  space.add(box('Observation module', 'Observation module', [11.6, DECK, -OS], [17.6, OS, OS]));
   {
-    const len = 6, cx = 14.6;
+    const len = 6, cx = 14.6, oy = (DECK - 0.05 + OS) / 2, oh = OS - DECK + 0.05;
     face(V(cx, OS, 0), V(0, -1, 0), V(1, 0, 0), len, OS * 2, undefined, hubWall);
     face(V(cx, 0, -OS), V(0, 0, 1), V(1, 0, 0), len, OS * 2, undefined, hubWall);
     face(V(cx, 0, OS), V(0, 0, -1), V(1, 0, 0), len, OS * 2, undefined, hubWall);
-    face(V(11.6, 0, 0), V(1, 0, 0), V(0, 0, -1), OS * 2, OS * 2, 0.95, hubWall);
-    // Floor (nadir side): diamond-plate walkway strips around the belly window.
-    const floorStrip = (x: number, w: number, z: number, d: number) => {
-      const m = new THREE.Mesh(scaleUV(new THREE.PlaneGeometry(w, d), w / 0.8, d / 0.8), hubFloor);
-      m.rotation.x = -Math.PI / 2; m.position.set(x, -OS, z); add(m);
-    };
-    floorStrip(cx - 2, 2, 0, OS * 2); floorStrip(cx + 2.5, 1, 0, OS * 2);
-    for (const z of [-OS + 0.6, OS - 0.6]) floorStrip(cx + 0.5, 3, z, 1.2);
-    const belly = new THREE.Mesh(new THREE.PlaneGeometry(3, OS * 2 - 2.4), hubGlass);
-    belly.rotation.x = -Math.PI / 2;
-    belly.position.set(cx + 0.5, -OS - 0.02, 0);
-    add(belly);
-    for (const z of [-1.2, 1.2]) { const f = boxPBR(3.1, 0.05, 0.06, hubFrame); f.position.set(cx + 0.5, -OS + 0.025, z); add(f); }
-    // The great window on the end cap: a thick brushed bezel, a bolt ring, double glazing.
-    const ring = new THREE.Mesh(scaleUV(new THREE.RingGeometry(1.75, OS * 1.42, 96, 1), 6, 6), hubWall);
-    ring.rotation.y = -Math.PI / 2;
-    ring.position.set(17.6, 0, 0);
-    add(ring);
-    for (const dx of [0.02, 0.1]) { // double glazing
-      const pane = new THREE.Mesh(new THREE.CircleGeometry(1.75, 96), hubGlass);
-      pane.rotation.y = -Math.PI / 2;
-      pane.position.set(17.6 + dx, 0, 0);
-      add(pane);
-    }
-    const bezel = new THREE.Mesh(scaleUV(new THREE.TorusGeometry(1.8, 0.1, 24, 128), 60, 3), hubFrame);
-    bezel.rotation.y = Math.PI / 2;
-    bezel.position.set(17.57, 0, 0);
-    add(bezel);
-    const lip = new THREE.Mesh(scaleUV(new THREE.CylinderGeometry(1.76, 1.76, 0.22, 96, 1, true), 40, 1), hubFrame);
-    lip.rotation.z = Math.PI / 2; lip.position.set(17.5, 0, 0);
-    lip.material = Object.assign(hubFrame.clone(), { side: THREE.DoubleSide });
-    add(lip);
+    windowFace(V(11.6, oy, 0), V(1, 0, 0), V(0, 0, -1), OS * 2, oh, [doorRect(oy)], hubWall);
+    // Deck with the glass inset (x 12.3–14.3, z ±0.9), framed flush; the hull pane 0.7 m below.
+    const gx0 = 12.3, gx1 = 14.3;
+    windowFace(V(cx, DECK, 0), V(0, 1, 0), V(1, 0, 0), len, OS * 2, [{ r: [gx0 - cx, -0.9, gx1 - cx, 0.9] }], deckMat, hubGlass, hubFrame);
+    const hullPane = new THREE.Mesh(new THREE.PlaneGeometry(gx1 - gx0, 1.8), hubGlass);
+    hullPane.rotation.x = -Math.PI / 2; hullPane.position.set((gx0 + gx1) / 2, -OS - 0.02, 0); add(hullPane);
+    for (const z of [-0.95, 0.95]) { const j = boxPBR(gx1 - gx0 + 0.1, 0.68, 0.06, hubFrame, 0.4); j.position.set((gx0 + gx1) / 2, DECK - 0.36, z); add(j); }
+    // The great window: annulus wall, double glazing, a thick bezel and a bolt ring, all at eye height.
+    const ring = new THREE.Mesh(scaleUV(new THREE.RingGeometry(WIN_R, OS * 1.42, 96, 1), 6, 6), hubWall);
+    ring.rotation.y = -Math.PI / 2; ring.position.set(17.6, WIN_Y, 0); add(ring);
+    for (const dx of [0.02, 0.1]) { const pane = new THREE.Mesh(new THREE.CircleGeometry(WIN_R, 96), hubGlass); pane.rotation.y = -Math.PI / 2; pane.position.set(17.6 + dx, WIN_Y, 0); add(pane); }
+    const bezel = new THREE.Mesh(scaleUV(new THREE.TorusGeometry(WIN_R + 0.05, 0.1, 24, 128), 60, 3), hubFrame);
+    bezel.rotation.y = Math.PI / 2; bezel.position.set(17.57, WIN_Y, 0); add(bezel);
+    const lip = new THREE.Mesh(scaleUV(new THREE.CylinderGeometry(WIN_R + 0.01, WIN_R + 0.01, 0.22, 96, 1, true), 40, 1), Object.assign(hubFrame.clone(), { side: THREE.DoubleSide }));
+    lip.rotation.z = Math.PI / 2; lip.position.set(17.5, WIN_Y, 0); add(lip);
     const bolts = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.035, 0.035, 0.03, 12), hubFrame, 32);
     const bm = new THREE.Matrix4(), bq = new THREE.Quaternion().setFromAxisAngle(V(0, 0, 1), Math.PI / 2);
-    for (let i = 0; i < 32; i++) {
-      const a = (i / 32) * Math.PI * 2;
-      bolts.setMatrixAt(i, bm.compose(V(17.56, Math.sin(a) * 1.98, Math.cos(a) * 1.98), bq, V(1, 1, 1)));
-    }
+    for (let i = 0; i < 32; i++) { const a = (i / 32) * Math.PI * 2; bolts.setMatrixAt(i, bm.compose(V(17.56, WIN_Y + Math.sin(a) * (WIN_R + 0.18), Math.cos(a) * (WIN_R + 0.18)), bq, V(1, 1, 1))); }
     add(bolts);
-    // Ceiling light panels and wall hardware.
-    for (const [y, z] of [[OS - 0.25, -OS + 0.25], [OS - 0.25, OS - 0.25]]) {
-      const l = new THREE.Mesh(new THREE.BoxGeometry(len - 0.6, 0.04, 0.14), hubLamp);
-      l.position.set(cx, y, z);
-      add(l);
-    }
-    const light = new THREE.PointLight(0xe8e0ff, 2.6, 14, 2);
-    light.position.set(cx - 1, OS * 0.6, 0);
-    add(light);
+    for (const z of [-OS + 0.25, OS - 0.25]) { const l = new THREE.Mesh(new THREE.BoxGeometry(len - 0.6, 0.04, 0.14), hubLamp); l.position.set(cx, OS - 0.25, z); add(l); }
+    const light = new THREE.PointLight(0xe8e0ff, 2.6, 14, 2); light.position.set(cx - 1, OS * 0.6, 0); add(light);
+    // Guard rails along the side walls at hand height (it is a gravity room now).
     for (const z of [-OS + 0.1, OS - 0.1]) {
-      const a = V(12.1, 0.9, z), b = V(17.1, 0.9, z);
+      const a = V(12.1, DECK + 1.0, z), b = V(17.1, DECK + 1.0, z);
       rails.push({ a, b });
-      const rod = new THREE.Mesh(scaleUV(new THREE.CylinderGeometry(0.022, 0.022, 5, 24), 1, 15), hubRail);
-      rod.rotation.z = Math.PI / 2;
-      rod.position.set(14.6, 0.9, z);
-      add(rod);
-      const gp = new THREE.Mesh(scaleUV(new THREE.CylinderGeometry(0.026, 0.026, 1.5, 24), 2, 1), hubGrip);
-      gp.rotation.z = Math.PI / 2; gp.position.set(14.6, 0.9, z); add(gp);
-      for (const x of [12.4, 14.6, 16.8]) {
-        const st = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, 0.1, 16), hubFrame);
-        st.rotation.x = Math.PI / 2; st.position.set(x, 0.9, z + (z < 0 ? -0.05 : 0.05)); add(st);
-      }
+      const rod = new THREE.Mesh(scaleUV(new THREE.CylinderGeometry(0.022, 0.022, 5, 24), 1, 15), hubRail); rod.rotation.z = Math.PI / 2; rod.position.set(14.6, DECK + 1.0, z); add(rod);
+      for (const x of [12.4, 14.6, 16.8]) { const st = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, 0.1, 16), hubFrame); st.rotation.x = Math.PI / 2; st.position.set(x, DECK + 1.0, z + (z < 0 ? -0.05 : 0.05)); add(st); }
     }
-    // Panels, bags and cable runs on the side walls (clear of the telescope, the console and the hatch).
     oru(V(12.9, 1.0, -OS), V(0, 0, 1), 0.55, 0.7, ['STAR TRACKER', 'ST-2 · NOMINAL'], '#e9e6de');
     oru(V(16.2, 1.0, -OS), V(0, 0, 1), 0.5, 0.6, ['THERMAL', 'LOOP B'], '#f2d24b');
-    oru(V(12.9, -0.9, OS), V(0, 0, -1), 0.6, 0.6, ['OPTICS', 'PWR 28V'], '#e9e6de');
-    bag(V(16.0, 0.3, OS), V(0, 0, -1), 0.5, 0.34, hubBagAlt, 'EYEPIECES');
-    bag(V(16.0, -0.2, OS), V(0, 0, -1), 0.46, 0.3, hubBag, 'FILTERS');
+    oru(V(12.9, -0.3, OS), V(0, 0, -1), 0.6, 0.6, ['OPTICS', 'PWR 28V'], '#e9e6de');
+    bag(V(16.0, 0.6, OS), V(0, 0, -1), 0.5, 0.34, hubBagAlt, 'EYEPIECES');
+    bag(V(16.0, 0.1, OS), V(0, 0, -1), 0.46, 0.3, hubBag, 'FILTERS');
     const cables: THREE.Vector3[][] = [];
-    for (let j = 0; j < 4; j++) {
-      const pts = [];
-      for (let i = 0; i <= 14; i++) pts.push(V(12 + 5 * (i / 14), OS - 0.14 - (j % 2) * 0.022 + Math.sin(i * 0.8 + j) * 0.006, -OS + 0.12 + Math.floor(j / 2) * 0.022));
-      cables.push(pts);
-    }
+    for (let j = 0; j < 4; j++) { const pts = []; for (let i = 0; i <= 14; i++) pts.push(V(12 + 5 * (i / 14), OS - 0.14 - (j % 2) * 0.022 + Math.sin(i * 0.8 + j) * 0.006, -OS + 0.12 + Math.floor(j / 2) * 0.022)); cables.push(pts); }
     cables.forEach((pts, j) => add(new THREE.Mesh(scaleUV(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 60, 0.011, 10, false), 18, 1), rubberCables[j % rubberCables.length])));
-    for (let i = 1; i < 14; i += 2) {
-      const tie = new THREE.Mesh(new THREE.TorusGeometry(0.034, 0.0035, 6, 14), new THREE.MeshStandardMaterial({ color: 0xe8e8e0, roughness: 0.55 }));
-      tie.position.set(12 + 5 * (i / 14), OS - 0.145, -OS + 0.13); tie.rotation.y = Math.PI / 2; add(tie);
-    }
+    for (let i = 1; i < 14; i += 2) { const tie = new THREE.Mesh(new THREE.TorusGeometry(0.034, 0.0035, 6, 14), new THREE.MeshStandardMaterial({ color: 0xe8e8e0, roughness: 0.55 })); tie.position.set(12 + 5 * (i / 14), OS - 0.145, -OS + 0.13); tie.rotation.y = Math.PI / 2; add(tie); }
   }
 
-  // The glass walkway between the research room and the hangar: the shuttle is on show all along it.
-  space.add(cyl('Hangar tunnel', 'Hangar', 'x', 0.4, 2.8, 0, 0, 1.15));
-  space.add(box('Hangar-door', 'Hangar', [-0.5, -0.95, -0.95], [1.5, 0.95, 0.95]));
+  // ---------- glass walkway ----------
+  // A pressurised glass bridge between the hangar bulkhead and the research room: three portal frames,
+  // tread plates on the deck, glass sides and roof, handrails at 1.0 m, and a gallery window into the bay.
+  const WW = 1.8, WH = 2.6, wx0 = 0.6, wx1 = RX0 - 0.2, wcx = (wx0 + wx1) / 2, wlen = wx1 - wx0, wtop = DECK + WH;
+  space.add(box('Walkway', 'Walkway', [wx0, DECK, -WW], [wx1, wtop, WW]));
   {
-    const shell = new THREE.Mesh(new THREE.CylinderGeometry(1.17, 1.17, 2.4, 48, 1, true), hubGlass);
-    shell.rotation.z = Math.PI / 2;
-    shell.position.set(1.6, 0, 0);
-    add(shell);
-    for (const x of [0.45, 1.0, 1.6, 2.2, 2.75]) {
-      const rib = new THREE.Mesh(scaleUV(new THREE.TorusGeometry(1.17, 0.045, 16, 64), 40, 2), hubFrame);
-      rib.rotation.y = Math.PI / 2;
-      rib.position.set(x, 0, 0);
-      add(rib);
+    const tread = boxPBR(wlen, 0.05, WW * 2, hubFloor, 0.8); tread.position.set(wcx, DECK - 0.025, 0); add(tread);
+    const frames = Math.round(wlen / 1.2);
+    for (let i = 0; i <= frames; i++) {
+      const x = THREE.MathUtils.lerp(wx0 + 0.05, wx1 - 0.05, i / frames);
+      for (const sz of [-1, 1]) { const post = boxPBR(0.1, WH, 0.1, hubFrame, 0.4); post.position.set(x, DECK + WH / 2, sz * (WW - 0.05)); add(post); }
+      const beam = boxPBR(0.1, 0.12, WW * 2, hubFrame, 0.4); beam.position.set(x, wtop - 0.06, 0); add(beam);
     }
-    // Longitudinal stringers between the ribs.
-    for (let i = 0; i < 8; i++) {
-      const a = (i / 8) * Math.PI * 2;
-      const st = boxPBR(2.6, 0.04, 0.04, hubFrame);
-      st.position.set(1.6, Math.cos(a) * 1.17, Math.sin(a) * 1.17); st.rotation.x = -a; add(st);
+    for (const sz of [-1, 1]) {
+      const kick = boxPBR(wlen, 0.18, 0.1, hubFrame, 0.4); kick.position.set(wcx, DECK + 0.09, sz * (WW - 0.05)); add(kick);
+      const eave = boxPBR(wlen, 0.1, 0.1, hubFrame, 0.4); eave.position.set(wcx, wtop - 0.05, sz * (WW - 0.05)); add(eave);
+      const side = new THREE.Mesh(new THREE.PlaneGeometry(wlen, WH - 0.28), hubGlass); side.position.set(wcx, DECK + 0.18 + (WH - 0.28) / 2, sz * WW); add(side);
+      const y = DECK + 1.0, z = sz * (WW - 0.17);
+      rails.push({ a: V(wx0 + 0.25, y, z), b: V(wx1 - 0.25, y, z) });
+      const rod = new THREE.Mesh(scaleUV(new THREE.CylinderGeometry(0.022, 0.022, wlen - 0.4, 24), 1, 6), hubRail); rod.rotation.z = Math.PI / 2; rod.position.set(wcx, y, z); add(rod);
+      for (let i = 0; i <= frames; i++) { const x = THREE.MathUtils.lerp(wx0 + 0.3, wx1 - 0.3, i / frames); const br = boxPBR(0.03, 0.03, 0.12, hubFrame, 0.2); br.position.set(x, y, z + sz * 0.07); add(br); }
+      const strip = new THREE.Mesh(new THREE.BoxGeometry(wlen - 0.3, 0.03, 0.05), hubLamp); strip.position.set(wcx, wtop - 0.13, sz * (WW - 0.14)); add(strip);
     }
-    const floor = new THREE.Mesh(scaleUV(new THREE.BoxGeometry(2.4, 0.04, 0.9), 3, 1), hubFloor);
-    floor.position.set(1.6, -1.05, 0);
-    add(floor);
-    for (const z of [-0.9, 0.9]) {
-      const a = V(0.6, 0.4, z), b = V(2.6, 0.4, z);
-      rails.push({ a, b });
-      const rod = new THREE.Mesh(scaleUV(new THREE.CylinderGeometry(0.022, 0.022, 2.0, 24), 1, 6), hubRail);
-      rod.rotation.z = Math.PI / 2; rod.position.set(1.6, 0.4, z); add(rod);
-    }
+    const roof = new THREE.Mesh(new THREE.PlaneGeometry(wlen, WW * 2), hubGlass); roof.rotation.x = Math.PI / 2; roof.position.set(wcx, wtop, 0); add(roof);
+    // Bulkheads at both ends: H-1 and the gallery window at the hangar end, R-1 at the research end.
+    const wy = (DECK - 0.05 + wtop) / 2, wh = WH + 0.05;
+    const gallery: { r: [number, number, number, number] } = { r: [0.7, DECK + 0.9 - wy, 1.7, DECK + 2.3 - wy] };
+    windowFace(V(wx0, wy, 0), V(1, 0, 0), V(0, 0, -1), WW * 2, wh, [doorRect(wy), gallery], hangarWall, hubGlass, hubFrame);
+    windowFace(V(wx1, wy, 0), V(-1, 0, 0), V(0, 0, 1), WW * 2, wh, [doorRect(wy)], hangarWall);
+    // Gallery reveal through the wall pair (x 0.4–0.6).
+    for (const [y, h, z, d] of [[DECK + 0.9, 0.02, -1.2, 1.0], [DECK + 2.3, 0.02, -1.2, 1.0]] as const) { const r = boxPBR(0.2, h, d, hubFrame, 0.4); r.position.set(0.5, y, z); add(r); }
+    for (const z of [-0.7, -1.7]) { const r = boxPBR(0.2, 1.4, 0.02, hubFrame, 0.4); r.position.set(0.5, DECK + 1.6, z); add(r); }
+    for (const x of [wx0 + wlen * 0.25, wx0 + wlen * 0.75]) { const light = new THREE.PointLight(0xfff1e0, 1.6, 6, 2); light.position.set(x, wtop - 0.4, 0); add(light); }
   }
-  // The hangar bay is built in its own frame (shuttle bay along −z, glass wall at z = −5.2, doors at the far end)
-  // and the whole bay is then turned onto the corridor axis: bay (x, z) → world (z + 5.6, −x).
+  doorway('H-1', 'Walkway', 0.4, 0.6, 'H-1 · BAY · PRESSURE DOOR');
+
+  // ---------- hangar bay ----------
+  // Built in its own frame (shuttle bay along −z, bulkhead at z = −5.2, doors at the far end) and turned onto
+  // the corridor axis: bay (x, z) → world (z + 5.6, −x). Same deck as every other room.
   const bay = new THREE.Group();
   bay.name = 'bay';
   bay.rotation.y = Math.PI / 2;
   bay.position.set(5.6, 0, 0);
   bay.updateMatrix();
   interior.add(bay);
-  const bayToWorld = (v: THREE.Vector3) => v.clone().applyMatrix4(bay.matrix);
-  // Gangway from the walkway sill down into the hangar: a diamond-plate ramp with handrails on both sides.
-  {
-    const dx = 7.3, dy = 2.9, len = Math.hypot(dx, dy), ang = Math.atan2(dy, dx);
-    const ramp = new THREE.Mesh(scaleUV(new THREE.BoxGeometry(len, 0.08, 1.3), len / 0.8, 1.6), hubFloor);
-    ramp.position.set(0.4 - dx / 2, -1.05 - dy / 2 - 0.04, 0);
-    ramp.rotation.z = ang;
-    add(ramp);
-    for (const sz of [-1, 1]) {
-      const rail = new THREE.Mesh(scaleUV(new THREE.CylinderGeometry(0.022, 0.022, len, 24), 1, len * 3), hubRail);
-      rail.rotation.z = Math.PI / 2 + ang; rail.position.set(0.4 - dx / 2, -1.05 - dy / 2 + 0.95, sz * 0.68); add(rail);
-      for (let t = 0; t <= 1.001; t += 0.2) {
-        const post = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, 0.95, 12), hubFrame);
-        post.position.set(0.4 - dx * t, -1.05 - dy * t + 0.47, sz * 0.68); add(post);
-      }
-      rails.push({ a: V(0.4, -0.1, sz * 0.68), b: V(0.4 - dx, -0.1 - dy, sz * 0.68) });
-    }
-  }
   target = bay;
-  const HG = { x: 6, y: 4, z0: -22, z1: -5.2 };
-  space.add(box('Hangar', 'Hangar', [HG.z0 + 5.6, -HG.y, -HG.x], [HG.z1 + 5.6, HG.y, HG.x]));
-  // Hangar bay: chipped industrial paint on the walls, a painted deck, structural ribs and caged work lights.
-  const hangarMat = pbrSet('brushed-aluminium', { color: 0xe4e7ec, normal: 0.6, roughness: 0.95 });
-  hangarMat.metalness = 0.6; hangarMat.userData.tile = 1.2;
-  const deckMat = pbrSet('hangar-floor', { color: 0x9aa0a8, normal: 1.2, roughness: 0.9 });
-  deckMat.userData.tile = 3;
-  const lineYellow = pbrSet('painted-metal', { albedo: recolouredPaint(0xf2c200), normal: 0.6, roughness: 0.9 });
-  lineYellow.metalness = 0.05;
+  const HG = { x: 6, z0: -22, z1: -5.2 }, FLOOR = DECK, HH = 8, CEIL = FLOOR + HH;
+  space.add(box('Hangar', 'Hangar', [HG.z0 + 5.6, FLOOR, -HG.x], [HG.z1 + 5.6, CEIL, HG.x]));
+  let bayScreenMesh: THREE.Mesh;
+  const bayCanvas = document.createElement('canvas'); bayCanvas.width = 1024; bayCanvas.height = 640;
+  const bayTex = new THREE.CanvasTexture(bayCanvas); bayTex.colorSpace = THREE.SRGBColorSpace;
+  const bayScreen = {
+    draw(lines: string[], tone: 'ok' | 'warn' | 'alert') {
+      const g = bayCanvas.getContext('2d')!;
+      const col = tone === 'ok' ? '#5ff0b0' : tone === 'warn' ? '#ffc23d' : '#ff5a4f';
+      g.fillStyle = '#071210'; g.fillRect(0, 0, 1024, 640);
+      g.fillStyle = col; g.fillRect(0, 0, 1024, 14);
+      g.font = '700 54px "Helvetica Neue", Arial, sans-serif'; g.fillText('BAY CONTROL · H-1', 48, 96);
+      g.font = '600 64px "Helvetica Neue", Arial, sans-serif';
+      lines.forEach((l, i) => g.fillText(l, 48, 220 + i * 110));
+      bayTex.needsUpdate = true;
+    },
+  };
+  bayScreen.draw(['DOORS CLOSED', 'BAY PRESSURISED'], 'ok');
   {
-    const len = HG.z1 - HG.z0, cz = (HG.z0 + HG.z1) / 2;
-    face(V(0, -HG.y, cz), V(0, 1, 0), V(1, 0, 0), HG.x * 2, len, undefined, deckMat);
-    face(V(0, HG.y, cz), V(0, -1, 0), V(1, 0, 0), HG.x * 2, len, undefined, hangarMat);
-    face(V(-HG.x, 0, cz), V(1, 0, 0), V(0, 0, 1), len, HG.y * 2, undefined, hangarMat);
-    face(V(HG.x, 0, cz), V(-1, 0, 0), V(0, 0, -1), len, HG.y * 2, undefined, hangarMat);
-    // The wall facing the walkway: solid, with the doorway through it.
-    face(V(0, 0, HG.z1), V(0, 0, -1), V(-1, 0, 0), HG.x * 2, HG.y * 2, 0.95, hangarMat);
-    // Structural ribs every 3 m: wall posts, ceiling beams, floor kick-rails.
+    const len = HG.z1 - HG.z0, cz = (HG.z0 + HG.z1) / 2, cy = FLOOR + HH / 2;
+    face(V(0, FLOOR, cz), V(0, 1, 0), V(1, 0, 0), HG.x * 2, len, undefined, hangarDeck);
+    face(V(0, CEIL, cz), V(0, -1, 0), V(1, 0, 0), HG.x * 2, len, undefined, hangarCeil);
+    // Side walls stop 0.3 m short of the door line, where the leaves pass into their pockets.
+    face(V(-HG.x, cy, cz + 0.15), V(1, 0, 0), V(0, 0, 1), len - 0.3, HH, undefined, hangarWall);
+    face(V(HG.x, cy, cz + 0.15), V(-1, 0, 0), V(0, 0, -1), len - 0.3, HH, undefined, hangarWall);
+    // Bulkhead with H-1 and the gallery window (u = world z here).
+    const by = cy - 0.025;
+    windowFace(V(0, by, HG.z1), V(0, 0, -1), V(-1, 0, 0), HG.x * 2, HH + 0.05,
+      [{ r: [-DOOR_W / 2, FLOOR - by, DOOR_W / 2, FLOOR + DOOR_H - by], open: true }, { r: [-1.7, FLOOR + 0.9 - by, -0.7, FLOOR + 2.3 - by] }], hangarWall, hubGlass, hubFrame);
+    // Exposed structure every 3 m: wall posts and ceiling beams in bare aluminium.
     for (let z = HG.z0 + 1.5; z < HG.z1 - 0.4; z += 3) {
-      for (const sx of [-1, 1]) { const p = boxPBR(0.12, HG.y * 2, 0.24, hubFrame, 0.6); p.position.set(sx * (HG.x - 0.06), 0, z); add(p); }
-      const beam = boxPBR(HG.x * 2, 0.26, 0.24, hubFrame, 0.6); beam.position.set(0, HG.y - 0.13, z); add(beam);
+      for (const sx of [-1, 1]) { const p = boxPBR(0.14, HH, 0.26, hubFrame, 0.6); p.position.set(sx * (HG.x - 0.07), cy, z); add(p); }
+      const beam = boxPBR(HG.x * 2, 0.3, 0.26, hubFrame, 0.6); beam.position.set(0, CEIL - 0.15, z); add(beam);
     }
-    // Hazard-striped kick plates along both walls, and floor lane markings in painted yellow.
+    // Door jambs where the leaves leave the room, the head track and a floor guide.
+    for (const sx of [-1, 1]) { const j = boxPBR(0.3, HH, 0.3, hubFrame, 0.6); j.position.set(sx * (HG.x - 0.15), cy, HG.z0 + 0.45); add(j); }
+    const track = boxPBR(HG.x * 4.1, 0.3, 0.3, hubFrame, 0.6); track.position.set(0, CEIL - 0.15, HG.z0); add(track);
+    const guide = new THREE.Mesh(new THREE.PlaneGeometry(HG.x * 2, 0.08), darkMat); guide.rotation.x = -Math.PI / 2; guide.position.set(0, FLOOR + 0.002, HG.z0); add(guide);
+    // Hazard bands: kick plates along both walls and the door sweep zone on the deck.
     for (const sx of [-1, 1]) {
-      const kp = new THREE.Mesh(new THREE.PlaneGeometry(len, 0.35), new THREE.MeshStandardMaterial({ map: labelTexture(['◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤'], { bg: '#facc15', fg: '#111', w: 2048, h: 40, font: 32 }), roughness: 0.6 }));
-      kp.rotation.y = sx > 0 ? -Math.PI / 2 : Math.PI / 2; kp.position.set(sx * (HG.x - 0.02), -HG.y + 0.3, cz); add(kp);
+      const kp = plane(len - 0.3, 0.3, hazard); kp.rotation.y = sx > 0 ? -Math.PI / 2 : Math.PI / 2; kp.position.set(sx * (HG.x - 0.02), FLOOR + 0.15, cz + 0.15); add(kp);
     }
-    for (const lx of [-2.1, 2.1]) { const m = new THREE.Mesh(new THREE.PlaneGeometry(0.16, len - 1), lineYellow); m.rotation.x = -Math.PI / 2; m.position.set(lx, -HG.y + 0.012, cz); add(m); }
-    const threshold = new THREE.Mesh(new THREE.PlaneGeometry(HG.x * 2 - 0.5, 0.75), new THREE.MeshStandardMaterial({ map: labelTexture(['◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤'], { bg: '#facc15', fg: '#111', w: 2048, h: 128, font: 90 }), roughness: 0.75 }));
-    threshold.rotation.x = -Math.PI / 2; threshold.position.set(0, -HG.y + 0.016, HG.z0 + 0.55); add(threshold);
-    const decal = new THREE.Mesh(new THREE.PlaneGeometry(6, 1.5), new THREE.MeshStandardMaterial({ map: plateTexture(['SHUTTLE BAY 01'], { bg: '#232733', fg: '#facc15', w: 2048, h: 512, font: 200 }), roughness: 0.7, transparent: true }));
-    decal.rotation.x = -Math.PI / 2; decal.position.set(0, -HG.y + 0.015, HG.z1 - 3.2); add(decal);
-    // Caged work lights along both walls: housing, cage bars and a diffuser.
+    const sweep = plane(HG.x * 2 - 0.6, 0.8, hazard); sweep.rotation.x = -Math.PI / 2; sweep.position.set(0, FLOOR + 0.003, HG.z0 + 0.7);
+    (sweep.material as THREE.Material).polygonOffset = true; (sweep.material as THREE.Material).polygonOffsetFactor = -2; add(sweep);
+    // A painted pedestrian lane from H-1 into the bay, and the bay stencil.
+    const paintLine = new THREE.MeshStandardMaterial({ color: 0xe8b60f, roughness: 0.7, polygonOffset: true, polygonOffsetFactor: -2 });
+    for (const lx of [-0.75, 0.75]) { const m = new THREE.Mesh(new THREE.PlaneGeometry(0.1, 6), paintLine); m.rotation.x = -Math.PI / 2; m.position.set(lx, FLOOR + 0.002, HG.z1 - 3.1); add(m); }
+    const stencil = (() => { const c = document.createElement('canvas'); c.width = 2048; c.height = 400; const g = c.getContext('2d')!; g.fillStyle = '#e8b60f'; g.font = '900 250px "Helvetica Neue", Arial, sans-serif'; g.textAlign = 'center'; g.fillText('BAY 01', 1024, 300); const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t; })();
+    const decal = new THREE.Mesh(new THREE.PlaneGeometry(3.6, 0.7), new THREE.MeshStandardMaterial({ map: stencil, transparent: true, roughness: 0.75, polygonOffset: true, polygonOffsetFactor: -2, depthWrite: false }));
+    decal.rotation.x = -Math.PI / 2; decal.rotation.z = Math.PI; decal.position.set(-3.2, FLOOR + 0.003, HG.z1 - 2.4); add(decal);
+    // Caged work lights high on both walls.
     for (const x of [-HG.x + 0.3, HG.x - 0.3]) for (let z = HG.z0 + 2; z < HG.z1; z += 3) {
-      const housing = boxPBR(0.3, 0.4, 0.7, hubFrame, 0.4); housing.position.set(x, HG.y - 0.7, z); add(housing);
-      const lens = new THREE.Mesh(new THREE.PlaneGeometry(0.24, 0.6), hubLamp); lens.rotation.x = Math.PI / 2; lens.position.set(x, HG.y - 0.905, z); add(lens);
-      for (let k = -2; k <= 2; k++) { const bar = boxPBR(0.01, 0.015, 0.7, hubFrame, 0.3); bar.position.set(x + k * 0.055, HG.y - 0.92, z); add(bar); }
+      const housing = boxPBR(0.3, 0.4, 0.7, hubFrame, 0.4); housing.position.set(x, CEIL - 0.9, z); add(housing);
+      const lens = new THREE.Mesh(new THREE.PlaneGeometry(0.24, 0.6), hubLamp); lens.rotation.x = Math.PI / 2; lens.position.set(x, CEIL - 1.105, z); add(lens);
+      for (let k = -2; k <= 2; k++) { const bar = boxPBR(0.01, 0.015, 0.7, hubFrame, 0.3); bar.position.set(x + k * 0.055, CEIL - 1.12, z); add(bar); }
     }
-    const sign = plane(3.4, 0.5, new THREE.MeshStandardMaterial({ map: labelTexture(['SHUTTLE BAY 01 · KEEP CLEAR OF THE DOORS'], { bg: '#1f2937', fg: '#facc15', w: 1024, h: 150, font: 40 }), roughness: 0.5 }));
-    sign.position.set(0, 3.4, HG.z1 - 0.05);
-    sign.rotation.y = Math.PI;
-    add(sign);
-    // Bay equipment, each where it would be used: ground-support panel at the cradle, door control by the hatch,
-    // fire-suppression main and nozzles overhead, an extinguisher cabinet, an amber beacon over the doors.
-    const gse = boxPBR(0.14, 1.5, 1.9, hubFrame, 0.5); gse.position.set(HG.x - 0.1, -1.6, -16.0); add(gse);
+    for (const [x, z] of [[-3, cz - 4], [3, cz - 4], [0, cz + 4]] as const) { const l = new THREE.PointLight(0xe0e8ff, 9, 22, 2); l.position.set(x, CEIL - 1.4, z); add(l); }
+    const sign = plane(3.4, 0.5, new THREE.MeshStandardMaterial({ map: labelTexture(['BAY 01 · KEEP CLEAR OF THE DOORS'], { bg: '#1f2937', fg: '#facc15', w: 1024, h: 150, font: 40 }), roughness: 0.5 }));
+    sign.position.set(0, FLOOR + 3.0, HG.z1 - 0.05); sign.rotation.y = Math.PI; add(sign);
+    // Ground support panel at the stand, the bay control console by H-1, fire main and cabinet, door beacon.
+    const gse = boxPBR(0.14, 1.5, 1.9, hubFrame, 0.5); gse.position.set(HG.x - 0.1, FLOOR + 1.3, -16.0); add(gse);
     const gsePlate = new THREE.Mesh(new THREE.PlaneGeometry(1.7, 1.3), new THREE.MeshStandardMaterial({ map: plateTexture(['GROUND SUPPORT', 'FUEL · POWER · DATA', 'STAND 01'], { bg: '#e9e6de', w: 1024, h: 768, font: 92 }), roughness: 0.55 }));
-    gsePlate.rotation.y = -Math.PI / 2; gsePlate.position.set(HG.x - 0.18, -1.6, -16.0); add(gsePlate);
-    const ctl = boxPBR(0.9, 0.7, 0.12, hubFrame, 0.5); ctl.position.set(-1.8, 0.7, HG.z1 - 0.1); add(ctl);
-    const ctlFace = new THREE.Mesh(new THREE.PlaneGeometry(0.8, 0.6), new THREE.MeshStandardMaterial({ map: plateTexture(['BAY CONTROL', 'DOORS CLOSED', 'SHUTTLE DOCKED'], { bg: '#0b1713', fg: '#6ff0c0', w: 1024, h: 768, font: 100 }), roughness: 0.35 }));
-    ctlFace.rotation.y = Math.PI; ctlFace.position.set(-1.8, 0.7, HG.z1 - 0.17); add(ctlFace);
+    gsePlate.rotation.y = -Math.PI / 2; gsePlate.position.set(HG.x - 0.18, FLOOR + 1.3, -16.0); add(gsePlate);
+    const ctl = boxPBR(0.9, 0.62, 0.12, hubFrame, 0.5); ctl.position.set(-1.6, FLOOR + 1.45, HG.z1 - 0.1); add(ctl);
+    bayScreenMesh = new THREE.Mesh(new THREE.PlaneGeometry(0.8, 0.5), new THREE.MeshBasicMaterial({ map: bayTex, toneMapped: false }));
+    bayScreenMesh.rotation.y = Math.PI; bayScreenMesh.position.set(-1.6, FLOOR + 1.45, HG.z1 - 0.17); add(bayScreenMesh);
     const estop = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.06, 0.05, 24), new THREE.MeshPhysicalMaterial({ color: 0xc81e1e, roughness: 0.3, clearcoat: 1 }));
-    estop.rotation.x = Math.PI / 2; estop.position.set(-1.45, 0.45, HG.z1 - 0.2); add(estop);
+    estop.rotation.x = Math.PI / 2; estop.position.set(-1.0, FLOOR + 1.2, HG.z1 - 0.2); add(estop);
     const fireMat = new THREE.MeshPhysicalMaterial({ color: 0xb3121c, metalness: 0.5, roughness: 0.35, clearcoat: 0.8 });
-    const main = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, len - 1, 24), fireMat); main.rotation.x = Math.PI / 2; main.position.set(2.6, HG.y - 0.12, cz); add(main);
-    for (let z = HG.z0 + 2.5; z < HG.z1 - 1; z += 3.2) { const nz = new THREE.Mesh(new THREE.ConeGeometry(0.07, 0.12, 16), fireMat); nz.rotation.x = Math.PI; nz.position.set(2.6, HG.y - 0.24, z); add(nz); }
-    const cab = boxPBR(0.5, 0.8, 0.16, fireMat as THREE.Material, 0.5); cab.position.set(HG.x - 0.1, -0.6, HG.z1 - 1.2); add(cab);
+    const main = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, len - 1, 24), fireMat); main.rotation.x = Math.PI / 2; main.position.set(2.6, CEIL - 0.42, cz); add(main);
+    for (let z = HG.z0 + 2.5; z < HG.z1 - 1; z += 3.2) { const nz = new THREE.Mesh(new THREE.ConeGeometry(0.07, 0.12, 16), fireMat); nz.rotation.x = Math.PI; nz.position.set(2.6, CEIL - 0.54, z); add(nz); }
+    const cab = boxPBR(0.5, 0.8, 0.16, fireMat as THREE.Material, 0.5); cab.position.set(HG.x - 0.1, FLOOR + 1.2, HG.z1 - 1.2); add(cab);
     const cabPlate = new THREE.Mesh(new THREE.PlaneGeometry(0.4, 0.2), new THREE.MeshStandardMaterial({ map: plateTexture(['FIRE', 'EXTINGUISHER'], { bg: '#f5f5f5', w: 512, h: 256, font: 70 }), roughness: 0.5 }));
-    cabPlate.rotation.y = -Math.PI / 2; cabPlate.position.set(HG.x - 0.19, -0.35, HG.z1 - 1.2); add(cabPlate);
+    cabPlate.rotation.y = -Math.PI / 2; cabPlate.position.set(HG.x - 0.19, FLOOR + 1.45, HG.z1 - 1.2); add(cabPlate);
     const beacon = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.14, 0.2, 24), new THREE.MeshStandardMaterial({ color: 0xffb020, emissive: 0xff8a00, emissiveIntensity: 0.9, roughness: 0.3 }));
-    beacon.name = 'bay-beacon'; beacon.position.set(0, HG.y - 0.3, HG.z0 + 0.7); add(beacon);
-    for (const [x, y] of [[-3, 2.5], [3, 2.5]]) {
-      const l = new THREE.PointLight(0xe0e8ff, 10, 26, 2);
-      l.position.set(x, y, cz);
-      add(l);
-    }
-    for (const x of [-HG.x + 0.12, HG.x - 0.12]) {
-      const a = V(x, 1.5, HG.z1 - 0.6), b = V(x, 1.5, HG.z0 + 1.5);
-      rails.push({ a: bayToWorld(a), b: bayToWorld(b) });
-      const L = a.distanceTo(b);
-      const rod = new THREE.Mesh(scaleUV(new THREE.CylinderGeometry(0.025, 0.025, L, 24), 1, L * 3), hubRail);
-      rod.rotation.x = Math.PI / 2;
-      rod.position.copy(a).add(b).multiplyScalar(0.5);
-      add(rod);
-      for (let t = 0; t <= 1.001; t += 0.125) { const post = new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.018, 0.12, 12), hubFrame); post.rotation.z = Math.PI / 2; post.position.copy(a).lerp(b, t).add(V(-Math.sign(x) * 0.0, 0, 0)); post.position.x += (x < 0 ? -0.06 : 0.06) * -1; add(post); }
-    }
+    beacon.name = 'bay-beacon'; beacon.position.set(0, CEIL - 0.6, HG.z0 + 0.8); add(beacon);
   }
-  // Hangar doors at the far end: two leaves that slide apart, ribbed and chipped like the walls.
-  const doorMat = pbrSet('brushed-aluminium', { color: 0xc4c9d2, normal: 0.7, roughness: 0.95 });
-  doorMat.metalness = 0.6; doorMat.userData.tile = 1.2;
-  const hangarLeft = boxPBR(HG.x, HG.y * 2, 0.2, doorMat, 1.2);
-  hangarLeft.position.set(-HG.x / 2, 0, HG.z0);
-  const hangarRight = boxPBR(HG.x, HG.y * 2, 0.2, doorMat, 1.2);
-  hangarRight.position.set(HG.x / 2, 0, HG.z0);
-  add(hangarLeft); add(hangarRight);
-  for (const d of [hangarLeft, hangarRight]) {
-    const stripe = new THREE.Mesh(new THREE.PlaneGeometry(HG.x - 0.4, 0.3), new THREE.MeshStandardMaterial({ map: labelTexture(['◢◤◢◤◢◤◢◤◢◤◢◤'], { bg: '#facc15', fg: '#111', w: 512, h: 48, font: 30 }), roughness: 0.6 }));
-    stripe.position.set(0, -HG.y + 0.5, 0.11);
-    d.add(stripe);
-    for (let y = -HG.y + 1.5; y < HG.y; y += 2.2) { const rib = boxPBR(HG.x - 0.3, 0.12, 0.08, hubFrame, 0.5); rib.position.set(0, y, 0.14); d.add(rib); }
-  }
+  // Bay doors: two painted leaves hung from the head track, stiffened, with a hazard band and a rubber meeting
+  // seal. Opened, each slides 6 m into a pocket outside its side wall (inside the hull).
+  const doorPaint = constructionMaterial(paintedPanels(0xb3b8bf, 27));
+  const LEAF_H = HH - 0.3;
+  const makeLeaf = (side: -1 | 1) => {
+    const g = new THREE.Group();
+    const body = boxPBR(HG.x, LEAF_H, 0.2, doorPaint, 2.4); g.add(body);
+    for (let y = -LEAF_H / 2 + 1.4; y < LEAF_H / 2; y += 1.6) { const rib = boxPBR(HG.x - 0.3, 0.14, 0.08, hubFrame, 0.5); rib.position.set(0, y, 0.14); g.add(rib); }
+    const band = plane(HG.x - 0.2, 0.4, hazard); band.position.set(0, -LEAF_H / 2 + 0.35, 0.181); g.add(band);
+    const seal = boxPBR(0.06, LEAF_H, 0.22, sealMat, 0.2); seal.position.set(-side * (HG.x / 2 - 0.03), 0, 0); g.add(seal);
+    g.position.set(side * HG.x / 2, FLOOR + LEAF_H / 2, HG.z0);
+    g.userData.keep = true;
+    add(g);
+    return g;
+  };
+  const hangarLeft = makeLeaf(-1), hangarRight = makeLeaf(1);
 
   target = interior;
 
   // ---------- mission patches ----------
   const patchMat = new THREE.MeshStandardMaterial({ map: patchTexture(), transparent: true, roughness: 0.7 });
-  for (const [pos, rotY] of [[V(2.83, 1.25, 0), Math.PI / 2], [V(13.0, 1.5, -OS + 0.03), 0]] as const) {
+  for (const [pos, rotY] of [[V(RX0 + 0.03, 0.9, -1.0), Math.PI / 2], [V(13.0, 1.6, -OS + 0.03), 0]] as const) {
     const p = plane(0.6, 0.6, patchMat);
     p.position.copy(pos);
     p.rotation.y = rotY;
@@ -628,50 +649,50 @@ export function buildStation(): Station {
   }
 
   // ---------- exterior ----------
+  // Two layers. `hull`: the closed shells, shown only when the camera is outside. `skin`: outward-facing
+  // surfaces that stay visible from inside the glass walkway (their backs are culled from inside the rooms),
+  // with the doorways cut through them so they never wall off a door.
   const hull = new THREE.Group();
   hull.name = 'hull';
   exterior.add(hull);
+  const skin = new THREE.Group();
+  skin.name = 'skin';
+  exterior.add(skin);
   {
-    const shellAt = (x0: number, x1: number, r: number) => {
-      const s = new THREE.Mesh(new THREE.CylinderGeometry(r, r, x1 - x0, 40, 1), mliMat);
-      s.rotation.z = Math.PI / 2;
-      s.position.set((x0 + x1) / 2, 0, 0);
-      hull.add(s);
-      for (const x of [x0, x1]) {
-        const ring = new THREE.Mesh(new THREE.TorusGeometry(r, 0.06, 8, 40), frameMat);
-        ring.rotation.y = Math.PI / 2;
-        ring.position.set(x, 0, 0);
-        hull.add(ring);
-      }
-    };
-    shellAt(2.8, 11.2, 2.15);
-    const walk = new THREE.Mesh(new THREE.CylinderGeometry(1.3, 1.3, 2.4, 32), mliMat);
-    walk.rotation.z = Math.PI / 2; walk.position.set(1.6, 0, 0);
-    hull.add(walk);
-    const obs = new THREE.Mesh(new THREE.CylinderGeometry(OS * 1.45, OS * 1.45, 6, 48, 1, false, 0, Math.PI * 2), mliMat);
-    obs.rotation.z = Math.PI / 2;
-    obs.position.set(14.6, 0, 0);
-    hull.add(obs);
-    const hangarShell = new THREE.Mesh(new THREE.BoxGeometry(HG.z1 - HG.z0, HG.y * 2 + 0.4, HG.x * 2 + 0.4), mliMat);
-    hangarShell.position.set((HG.z0 + HG.z1) / 2 + 5.6, 0, 0);
-    hull.add(hangarShell);
-    // Truss above the station, carrying solar wings and radiators.
+    const doorHole = (cy: number) => new THREE.Path([new THREE.Vector2(-DOOR_W / 2, DECK - cy), new THREE.Vector2(-DOOR_W / 2, DECK + DOOR_H - cy), new THREE.Vector2(DOOR_W / 2, DECK + DOOR_H - cy), new THREE.Vector2(DOOR_W / 2, DECK - cy)]);
+    // Research module: an open-ended MLI cylinder and two end caps with the doorway cut out.
+    const rs = new THREE.Mesh(new THREE.CylinderGeometry(2.15, 2.15, 11.2 - RX0, 48, 1, true), mliMat);
+    rs.rotation.z = Math.PI / 2; rs.position.set((RX0 + 11.2) / 2, 0, 0); skin.add(rs);
+    for (const [x, rot] of [[RX0 - 0.01, -Math.PI / 2], [11.21, Math.PI / 2]] as const) {
+      const sh = new THREE.Shape(); sh.absarc(0, 0, 2.15, 0, Math.PI * 2, false); sh.holes.push(doorHole(0));
+      const cap = new THREE.Mesh(new THREE.ShapeGeometry(sh, 48), mliMat); cap.rotation.y = rot; cap.position.set(x, 0, 0); skin.add(cap);
+    }
+    // Hangar: the bulkhead face (with H-1 and the gallery cut out), roof, floor and the door-pocket housings.
+    const bayOut = new THREE.Group(); bayOut.rotation.y = Math.PI / 2; bayOut.position.set(5.6, 0, 0); skin.add(bayOut);
+    const W = 12.6, by = DECK + HH / 2;
+    const bh = new THREE.Shape([new THREE.Vector2(-W, DECK - 0.25 - by), new THREE.Vector2(W, DECK - 0.25 - by), new THREE.Vector2(W, DECK + HH + 0.25 - by), new THREE.Vector2(-W, DECK + HH + 0.25 - by)]);
+    bh.holes.push(doorHole(by));
+    bh.holes.push(new THREE.Path([new THREE.Vector2(0.7, DECK + 0.9 - by), new THREE.Vector2(0.7, DECK + 2.3 - by), new THREE.Vector2(1.7, DECK + 2.3 - by), new THREE.Vector2(1.7, DECK + 0.9 - by)]));
+    const bulk = new THREE.Mesh(new THREE.ShapeGeometry(bh), mliMat); bulk.position.set(0, by, HG.z1 + 0.012); bayOut.add(bulk);
+    const shell = (w: number, h: number, d: number, x: number, y: number, z: number) => { const b = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mliMat); b.position.set(x, y, z); bayOut.add(b); };
+    shell(W * 2, 0.2, HG.z1 - HG.z0, 0, DECK - 0.15, (HG.z0 + HG.z1) / 2);          // floor
+    shell(W * 2, 0.2, HG.z1 - HG.z0, 0, DECK + HH + 0.15, (HG.z0 + HG.z1) / 2);     // roof
+    for (const sx of [-1, 1]) {
+      shell(0.2, HH + 0.5, HG.z1 - HG.z0 - 0.6, sx * (HG.x + 0.12), by, (HG.z0 + HG.z1) / 2 + 0.3); // side walls
+      shell(HG.x + 0.5, HH + 0.5, 0.6, sx * (HG.x * 1.5 + 0.35), by, HG.z0 + 0.05);           // door pockets
+    }
+    // Closed shells for the view from outside.
+    const obs = new THREE.Mesh(new THREE.CylinderGeometry(OS * 1.45, OS * 1.45, 6, 48), mliMat);
+    obs.rotation.z = Math.PI / 2; obs.position.set(14.6, 0, 0); hull.add(obs);
+    // Truss above the station, clear of the 8 m bay, carrying solar wings and radiators.
+    const TY = 2.6; // lift over the old layout
     const truss = new THREE.Group();
     const trussMat = new THREE.MeshStandardMaterial({ color: 0xb8bcc6, roughness: 0.4, metalness: 0.7 });
     for (let x = -28; x <= 28; x += 2) {
-      for (const [y, z] of [[5.6, -0.7], [5.6, 0.7], [7.0, -0.7], [7.0, 0.7]]) {
-        const b = new THREE.Mesh(new THREE.BoxGeometry(2, 0.08, 0.08), trussMat);
-        b.position.set(x, y, z);
-        truss.add(b);
-      }
-      const d = new THREE.Mesh(new THREE.BoxGeometry(0.06, 1.6, 0.06), trussMat);
-      d.position.set(x - 1, 6.3, 0);
-      d.rotation.x = 0.5;
-      truss.add(d);
+      for (const [y, z] of [[5.6, -0.7], [5.6, 0.7], [7.0, -0.7], [7.0, 0.7]]) { const b = new THREE.Mesh(new THREE.BoxGeometry(2, 0.08, 0.08), trussMat); b.position.set(x, y + TY, z); truss.add(b); }
+      const d = new THREE.Mesh(new THREE.BoxGeometry(0.06, 1.6, 0.06), trussMat); d.position.set(x - 1, 6.3 + TY, 0); d.rotation.x = 0.5; truss.add(d);
     }
-    const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.15, 3.4, 12), trussMat);
-    mast.position.set(0, 4.0, 0);
-    truss.add(mast);
+    const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.15, 6.0, 12), trussMat); mast.position.set(7, 4.5, 0); truss.add(mast);
     const cellTex = (() => {
       const c = document.createElement('canvas'); c.width = 256; c.height = 512;
       const g = c.getContext('2d')!;
@@ -681,66 +702,40 @@ export function buildStation(): Station {
       const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
     })();
     const cellMat = new THREE.MeshStandardMaterial({ map: cellTex, roughness: 0.25, metalness: 0.6, side: THREE.DoubleSide });
-    for (const x of [-18, -12, 18, 24]) for (const z of [-1, 1]) {
-      const wing = new THREE.Mesh(new THREE.PlaneGeometry(4.2, 16), cellMat);
-      wing.rotation.x = -Math.PI / 2;
-      wing.position.set(x, 6.3, z * 9.2);
-      truss.add(wing);
-    }
+    for (const x of [-18, -12, 18, 24]) for (const z of [-1, 1]) { const wing = new THREE.Mesh(new THREE.PlaneGeometry(4.2, 16), cellMat); wing.rotation.x = -Math.PI / 2; wing.position.set(x, 6.3 + TY, z * 9.2); truss.add(wing); }
     const radMat = new THREE.MeshStandardMaterial({ color: 0xf2f2ef, roughness: 0.3, metalness: 0.2, side: THREE.DoubleSide });
-    for (const x of [-8, 8]) {
-      const r = new THREE.Mesh(new THREE.PlaneGeometry(3, 9), radMat);
-      r.position.set(x, 9.5, 0);
-      truss.add(r);
-    }
+    for (const x of [-8, 8]) { const r = new THREE.Mesh(new THREE.PlaneGeometry(3, 9), radMat); r.position.set(x, 9.5 + TY, 0); truss.add(r); }
     const dish = new THREE.Mesh(new THREE.SphereGeometry(0.9, 24, 12, 0, Math.PI * 2, 0, Math.PI / 3.2), new THREE.MeshStandardMaterial({ color: 0xe5e7eb, roughness: 0.3, metalness: 0.4, side: THREE.DoubleSide }));
-    dish.position.set(4, 8.2, 2);
-    dish.rotation.x = -0.6;
-    truss.add(dish);
-    for (const [x, h] of [[-4, 2.4], [6, 1.6], [-12, 2.0]]) {
-      const ant = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, h, 6), trussMat);
-      ant.position.set(x, 7.0 + h / 2, -0.6);
-      truss.add(ant);
-    }
+    dish.position.set(4, 8.2 + TY, 2); dish.rotation.x = -0.6; truss.add(dish);
+    for (const [x, h] of [[-4, 2.4], [6, 1.6], [-12, 2.0]]) { const ant = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, h, 6), trussMat); ant.position.set(x, 7.0 + TY + h / 2, -0.6); truss.add(ant); }
     exterior.add(truss);
-    // (Exterior handrails and EVA routes went with the airlock.)
-    // Exterior patch.
     const extPatch = plane(2.2, 2.2, patchMat);
-    extPatch.position.set(7, 0, 2.17);
-    hull.add(extPatch);
+    extPatch.position.set((RX0 + 11.2) / 2, 0, 2.17);
+    skin.add(extPatch);
   }
 
-  // Floor heights for walking. Each room has its own floor; the hatches blend between them, the hangar
-  // is reached down a gangway from the walkway, and the shuttle's cradle stands on the deck.
-  const mix = (a: number, b: number, x0: number, x1: number, x: number) => a + (b - a) * THREE.MathUtils.smoothstep(x, x0, x1);
-  const groundAt = (x: number, z: number) => {
-    if (x < 0.4) {
-      // Hangar. The gangway runs from the walkway sill down to the deck along z ≈ 0.
-      if (Math.abs(z) < 0.66 && x > -6.9) return mix(-3.95, -1.05, -6.9, 0.4, x);
-      return -4.0;
-    }
-    if (x < 2.8) return mix(-1.05, -1.5, 2.3, 3.3, x);   // walkway into the research room
-    if (x < 11.4) return mix(-1.5, -1.5, 0, 1, 0) + mix(0, -0.7, 10.6, 12.2, x); // research room, then down into the observatory
-    return -2.2;
-  };
+  // Walking: one deck everywhere, so the floor under any point is the deck. No hidden ramps, no steps.
+  const groundAt = () => DECK;
 
   const anchors: Anchors = {
-    spawn: V(5.0, 0.1, 0.5),
+    spawn: V(6.8, DECK + 1.55, 0.5),
     telescopeBase: V(15.4, -0.7, 0),
     telescopeEye: V(14.3, 0.35, 0),
     workstation: V(8.2, -0.25, -1.2),
     workstationSeat: V(8.2, 0.05, -0.35),
-    hangarConsole: V(0, 0.6, 1.4),
-    shuttleDock: V(-10.8, -2.0, -2.35),
+    hangarConsole: V(0.3, DECK + 1.45, 1.6),
+    shuttleDock: V(-10.8, DECK, -2.35),
   };
 
-  // Static walls, racks, frames and fittings become one mesh per material; the doors, beacon and workstation stay live.
-  const merge = mergeStatic(interior, [hangarLeft, hangarRight]);
+  // Static walls, racks, frames and fittings become one mesh per material; the doors, leaves, beacon and workstation stay live.
+  const merge = mergeStatic(interior, [hangarLeft, hangarRight, ...hatches.map((h) => h.leaf)]);
   interior.userData.merge = merge;
+  void bayScreenMesh!;
 
   return {
     interior, exterior, space, rails, anchors, wallSpots, glass, groundAt,
     doors: { hangarLeft, hangarRight },
+    hatches, bayScreen,
     hull,
   };
 }

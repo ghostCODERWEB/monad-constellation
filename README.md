@@ -55,7 +55,7 @@ so it is a glowing limb from space and a blue or dusk-orange sky from inside.
 
 ## Reputation on Monad
 
-Each wallet gets a 0–1000 score, methodology `nansen-rep-v1` (`src/lib/reputation.ts`):
+Each wallet gets a 0–1000 score, methodology `nansen-rep-v2` (`src/lib/reputation.ts`):
 
 | Part | Points | From |
 | --- | --- | --- |

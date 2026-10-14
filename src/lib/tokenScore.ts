@@ -14,7 +14,8 @@ export const topNShare = (s: number[], n: number) => sortDesc(s).slice(0, n).red
 /** HHI normalised for holder count: N equal holders read 0, one holder reads 1. */
 export function normalizedHhi(s: number[]) {
   const n = s.length;
-  if (n <= 1) return 0;
+  if (n === 0) return 0;
+  if (n === 1) return s[0] > 0 ? 1 : 0;
   const raw = s.reduce((x, v) => x + v * v, 0), floor = 1 / n;
   return Math.max(0, (raw - floor) / (1 - floor));
 }
@@ -56,10 +57,16 @@ export function insiderScore(clusters: HolderCluster[], clusteredHolders: number
   return { score: 100 * Math.min(1, raw), maxShare, deployer };
 }
 
-/** Informed money selling while fresh wallets buy: the distribution-into-retail pattern. */
+/**
+ * Informed money selling while fresh wallets buy: the distribution-into-retail pattern.
+ * Only the overlap counts (the smaller of the two flows, as a share of market cap), so
+ * the score never falls as either side grows, and either side alone reads 0:
+ * 0 = no pattern, ~20 at 1% of market cap, ~76 at 5%, approaching 100.
+ */
 export function windShearScore(freshNetUsd: number, smartNetUsd: number, marketCapUsd: number) {
   const smOut = Math.max(0, -smartNetUsd), freshIn = Math.max(0, freshNetUsd);
-  return 100 * sigmoid((8 * (freshIn - smOut)) / Math.max(marketCapUsd, 1));
+  const overlap = Math.min(smOut, freshIn) / Math.max(marketCapUsd, 1);
+  return 100 * (2 * sigmoid(40 * overlap) - 1);
 }
 
 export function exitLiquidityScore(liquidityUsd: number, marketCapUsd: number, maxClusterShare: number) {
@@ -105,24 +112,36 @@ export function nansenIndicatorRisk(indicators: { type: string; score: string | 
   return w > 0 ? sum / w : null;
 }
 
-const MAJOR_WRAPPED = /^(W?ETH|WSTETH|WEETH|W?BTC|CBBTC|W?MON)$/i;
+/**
+ * Wrapped majors on Monad, by contract address as Nansen's Monad token screener lists
+ * them (checked 2026-10-14). Identity is the address: a token that merely calls itself
+ * "WETH" gets no discount.
+ */
+export const VERIFIED_MAJORS: Record<string, string> = {
+  '0x3bd359c1119da7da1d913d1c4d2b7c461115433a': 'WMON',
+  '0xee8c0e9f1bffb4eb878d8f15f368a02a35481242': 'WETH',
+  '0x0555e30da8f98308edb960aa94c0db47230d2b9c': 'WBTC',
+  '0xd18b7ec58cdf4876f6afebd3ed1730e4ce10414b': 'CBBTC',
+  '0x10aeaf63194db8d453d4d85a06e5efe1dd0b5417': 'WSTETH',
+  '0xa3d68b74bf0528fdd07263c60d6488749044914b': 'WEETH',
+};
 /** An established asset carries less dump risk than the same on-chain pattern on a small cap. */
-export function sizeFactor(marketCapUsd: number | null | undefined, isStablecoin: boolean, symbol: string) {
+export function sizeFactor(marketCapUsd: number | null | undefined, isStablecoin: boolean, address: string) {
   if (isStablecoin) return 0.35;
-  if (MAJOR_WRAPPED.test(symbol.replace(/[^A-Za-z0-9]/g, ''))) return 0.45;
+  if (VERIFIED_MAJORS[address.toLowerCase()]) return 0.45;
   const m = marketCapUsd ?? 0;
   return m >= 1e10 ? 0.45 : m >= 1e9 ? 0.7 : m >= 1e8 ? 0.9 : 1;
 }
 
 export interface TokenScore { score: number; band: Band; confidence: number; nansen: number | null; model: number | null; subScores: SubScores; missing: SubKey[] }
-export function tokenScore(sub: SubScores, ctx: { marketCapUsd: number | null; isStablecoin: boolean; symbol: string }): TokenScore {
+export function tokenScore(sub: SubScores, ctx: { marketCapUsd: number | null; isStablecoin: boolean; address: string }): TokenScore {
   const ok = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
   const n = ok(sub.nansenRisk) ? sub.nansenRisk : null;
   const own = SUB_KEYS.filter((k) => k !== 'nansenRisk' && ok(sub[k]));
   const ownW = own.reduce((s, k) => s + W[k], 0);
   const model = own.length ? own.reduce((s, k) => s + W[k] * (sub[k] as number), 0) / ownW : null;
   const raw = n != null && model != null ? 0.5 * n + 0.5 * model : (n ?? model ?? 50);
-  const score = raw * sizeFactor(ctx.marketCapUsd, ctx.isStablecoin, ctx.symbol);
+  const score = raw * sizeFactor(ctx.marketCapUsd, ctx.isStablecoin, ctx.address);
   const allW = SUB_KEYS.filter((k) => k !== 'nansenRisk').reduce((s, k) => s + W[k], 0);
   return { score, band: bandOf(score), confidence: (n != null ? 0.5 : 0) + 0.5 * (ownW / allW), nansen: n, model, subScores: sub, missing: SUB_KEYS.filter((k) => sub[k] == null) };
 }
@@ -132,10 +151,14 @@ export type CheckStatus = 'pass' | 'warn' | 'fail' | 'unknown';
 export interface Check { id: string; title: string; status: CheckStatus; value: string; detail: string }
 export type Verdict = 'low' | 'moderate' | 'high' | 'critical' | 'stablecoin' | 'unknown';
 
-/** Raises the model's verdict when checks fail: one fail is at least Moderate, two or more at least High. */
+/**
+ * Raises the model's verdict when checks fail: one fail is at least Moderate, two or more
+ * at least High. "Stablecoin" is a category, not a pass: it is the verdict only when no
+ * check fails.
+ */
 export function verdictOf(band: Band | null, checks: Check[], isStablecoin: boolean): Verdict {
-  if (isStablecoin) return 'stablecoin';
   const fails = checks.filter((c) => c.status === 'fail').length;
+  if (isStablecoin && fails === 0) return 'stablecoin';
   let v: Verdict = band === 'clear' ? 'low' : band === 'cloudy' ? 'moderate' : band === 'watch' ? 'high' : band === 'warning' ? 'critical' : 'unknown';
   if (fails >= 2 && (v === 'low' || v === 'moderate' || v === 'unknown')) v = 'high';
   else if (fails === 1 && (v === 'low' || v === 'unknown')) v = 'moderate';

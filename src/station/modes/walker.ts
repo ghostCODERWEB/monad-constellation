@@ -9,6 +9,9 @@
 // Gamepad: left stick move, right stick look, LB/RB roll, LT/RT down/up,
 // A push off, X grab, B brake, Y interact.
 import * as THREE from 'three';
+import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
+import { bearing, buildGlove, suitMaterials } from '../world/suit';
+import { scaleUV } from '../world/pbr';
 import type { Input } from '../core/input';
 import { PAD } from '../core/input';
 import type { Space } from '../core/space';
@@ -32,8 +35,18 @@ export interface Walker {
   view: ViewMode;
   /** Heading and tilt while walking (the quaternion is rebuilt from them). */
   yaw: number; pitch: number;
-  /** How far the astronaut has stridden: drives the walking animation. */
+  /** How far the astronaut has stridden. */
   stride: number;
+  /** Gait phase in radians: one full cycle (two steps) per 2π. Legs, hands and head-bob all read it. */
+  phase: number;
+  /** Floating: the suit thrusters' current acceleration (world, m/s²), for the jets and the limbs' inertia. */
+  thrust: THREE.Vector3;
+  /** Floating: a brief knock from hitting a wall (world, m/s²): the limbs feel it, the thrusters do not fire. */
+  jolt: THREE.Vector3;
+  /** Floating: 1 at the moment of a push-off, fading: the legs extend through it. */
+  push: number;
+  /** Floating while holding a rail: the point the hand is on. */
+  gripPoint: THREE.Vector3 | null;
 }
 
 export type MoveMode = 'walk' | 'float';
@@ -49,6 +62,8 @@ export interface WalkerEvents {
   bump?: (speed: number) => void;
 }
 
+/** Walking speeds on the deck, m/s: a brisk walk and a run (Shift). */
+export const WALK_SPEED = 2.6, WALK_RUN = 5.2;
 const THRUST = 2.4;   // m/s² from the suit's micro-thrusters: brisk enough to cross a module in seconds
 const MAX = 3.8;      // a sensible indoor top speed, m/s
 const LOOK = 0.0022;
@@ -57,11 +72,12 @@ export function createWalker(spawn: THREE.Vector3): Walker {
   return {
     pos: spawn.clone(), vel: new THREE.Vector3(), quat: new THREE.Quaternion().setFromEuler(new THREE.Euler(0, -Math.PI / 2, 0)),
     radius: 0.32, assist: true, grip: null, holding: null, reach: { left: 0, right: 0 }, contact: 0,
-    moveMode: 'walk', view: 'first', yaw: -Math.PI / 2, pitch: 0, stride: 0,
+    moveMode: 'walk', view: 'first', yaw: -Math.PI / 2, pitch: 0, stride: 0, phase: 0, thrust: new THREE.Vector3(), jolt: new THREE.Vector3(), push: 0, gripPoint: null,
   };
 }
 
 const tmp = new THREE.Vector3(), tq = new THREE.Quaternion(), ax = new THREE.Vector3();
+const knee = new THREE.Vector3(), kneeWas = new THREE.Vector3();
 
 function nearestOnRail(rail: Rail, p: THREE.Vector3) {
   const ab = tmp.subVectors(rail.b, rail.a);
@@ -73,7 +89,7 @@ function nearestOnRail(rail: Rail, p: THREE.Vector3) {
 export function setMoveMode(w: Walker, mode: MoveMode) {
   if (w.moveMode === mode) return;
   w.moveMode = mode;
-  w.grip = null;
+  w.grip = null; w.gripPoint = null;
   if (mode === 'walk') {
     const e = new THREE.Euler().setFromQuaternion(w.quat, 'YXZ');
     w.yaw = e.y; w.pitch = THREE.MathUtils.clamp(e.x, -1.3, 1.3);
@@ -99,32 +115,45 @@ function stepWalking(w: Walker, input: Input, dt: number, space: Space | null, g
   const mx = (input.down('KeyD') ? 1 : 0) - (input.down('KeyA') ? 1 : 0) + input.axis(0);
   const mz = (input.down('KeyW') ? 1 : 0) - (input.down('KeyS') ? 1 : 0) - input.axis(1);
   const run = input.down('ShiftLeft', 'ShiftRight') || input.padDown(PAD.A);
-  want.set(0, 0, 0).addScaledVector(fwdFlat, mz).addScaledVector(rightFlat, mx);
+  // A brisk walk and a real run; sidesteps and backing up are slower, as on foot.
+  want.set(0, 0, 0).addScaledVector(fwdFlat, mz * (mz < 0 ? 0.7 : 1)).addScaledVector(rightFlat, mx * 0.85);
   if (want.lengthSq() > 1) want.normalize();
-  want.multiplyScalar(run ? 4.4 : 2.4);
-  // Quick to start and stop, like feet on a deck: no drifting.
-  const k = 1 - Math.exp(-(want.lengthSq() > 0 ? 12 : 18) * dt);
+  want.multiplyScalar(run ? WALK_RUN : WALK_SPEED);
+  // Quick to start and stop, like feet on a deck: about a quarter-second to full pace, no drifting.
+  const k = 1 - Math.exp(-(want.lengthSq() > 0 ? 10 : 16) * dt);
   w.vel.x += (want.x - w.vel.x) * k;
   w.vel.z += (want.z - w.vel.z) * k;
   w.vel.y = 0;
-  w.pos.x += w.vel.x * dt;
-  w.pos.z += w.vel.z * dt;
-  // Walls: keep the body inside the station, sliding along them.
-  if (space) {
-    const before = Math.hypot(w.vel.x, w.vel.z);
-    space.resolve(w.pos, w.vel, w.radius, 0);
-    w.vel.y = 0;
-    w.contact = Math.hypot(w.vel.x, w.vel.z) < before * 0.8 ? 1 : w.contact * Math.exp(-6 * dt);
+  // Move in short collision-checked steps, so a slow frame covers the full distance without passing a wall.
+  const steps = Math.max(1, Math.ceil(dt / 0.035));
+  for (let i = 0; i < steps; i++) {
+    w.pos.x += w.vel.x * (dt / steps);
+    w.pos.z += w.vel.z * (dt / steps);
+    // Walls: keep the body inside the station, sliding along them.
+    if (space) {
+      const before = Math.hypot(w.vel.x, w.vel.z);
+      space.resolve(w.pos, w.vel, w.radius, 0);
+      w.vel.y = 0;
+      w.contact = Math.hypot(w.vel.x, w.vel.z) < before * 0.8 ? 1 : w.contact * Math.exp(-6 * (dt / steps));
+    }
   }
   // Feet follow the floor.
   const targetY = groundAt(w.pos.x, w.pos.z) + EYE_HEIGHT;
   w.pos.y += (targetY - w.pos.y) * (1 - Math.exp(-12 * dt));
   if (space) {
     space.resolve(w.pos, w.vel, w.radius, 0);
+    // The body, not just the eye: a point at knee height must be in the air too, so legs never
+    // pass through a wall under a window or a shut door.
+    knee.copy(w.pos); knee.y -= EYE_HEIGHT - 0.4;
+    kneeWas.copy(knee);
+    if (space.resolve(knee, w.vel, w.radius, 0)) { w.pos.x += knee.x - kneeWas.x; w.pos.z += knee.z - kneeWas.z; }
     // Furniture is solid: slide around it, then make sure that didn't push a wall through you.
     if (space.resolveProps(w.pos, w.vel, w.radius, EYE_HEIGHT, 0.2)) { space.resolve(w.pos, w.vel, w.radius, 0); w.contact = 1; }
   }
-  w.stride += Math.hypot(w.vel.x, w.vel.z) * dt;
+  const sp = Math.hypot(w.vel.x, w.vel.z);
+  w.stride += sp * dt;
+  // Longer strides at speed, as people do: a 1.5 m cycle at an amble, about 1.9 m at a brisk walk, 2.8 m running.
+  w.phase += (sp / (1.0 + 0.35 * sp)) * Math.PI * 2 * dt;
   w.reach.left *= Math.exp(-4 * dt); w.reach.right *= Math.exp(-4 * dt);
 }
 
@@ -184,7 +213,7 @@ export function stepWalker(w: Walker, input: Input, dt: number, space: Space | n
   if (grabKey) {
     if (w.grip || w.holding) {
       if (w.holding) { w.holding.held = false; w.holding.vel.copy(w.vel).addScaledVector(fwd, 0.25); w.holding = null; }
-      w.grip = null;
+      w.grip = null; w.gripPoint = null;
       ev.release?.();
     } else {
       const b = bodies?.aimed(w.pos, fwd);
@@ -214,6 +243,8 @@ export function stepWalker(w: Walker, input: Input, dt: number, space: Space | n
     w.vel.lerp(target, 1 - Math.exp(-8 * dt));
     w.grip.t = THREE.MathUtils.clamp(w.grip.t + (w.vel.dot(dir) * dt) / len, 0, 1);
     const point = w.grip.rail.a.clone().lerp(w.grip.rail.b, w.grip.t);
+    w.gripPoint = point.clone();
+    w.thrust.multiplyScalar(Math.exp(-10 * dt));
     // Hold at arm's length from the rail, toward the cabin.
     const off = new THREE.Vector3().subVectors(w.pos, point);
     off.addScaledVector(dir, -off.dot(dir));
@@ -227,7 +258,9 @@ export function stepWalker(w: Walker, input: Input, dt: number, space: Space | n
     if (input.hit('ShiftLeft', 'ShiftRight') || input.padHit(PAD.A)) {
       // Let go with a shove in the look direction.
       w.vel.addScaledVector(fwd, 2.0);
-      w.grip = null;
+      w.grip = null; w.gripPoint = null;
+      w.gripPoint = null;
+      w.push = 1;
       ev.pushOff?.(2.0);
     }
   } else {
@@ -235,6 +268,8 @@ export function stepWalker(w: Walker, input: Input, dt: number, space: Space | n
     const acc = fwd.clone().multiplyScalar(mz).addScaledVector(right, mx).addScaledVector(up, my);
     if (acc.lengthSq() > 1) acc.normalize();
     w.vel.addScaledVector(acc, THRUST * dt);
+    w.thrust.lerp(acc.multiplyScalar(THRUST), 1 - Math.exp(-12 * dt));
+    w.gripPoint = null;
     // Push off: a strong shove away from whatever wall is at hand.
     if (input.hit('ShiftLeft', 'ShiftRight') || input.padHit(PAD.A)) {
       const wall = space?.nearWall(w.pos, w.radius, w.radius + 0.35);
@@ -242,6 +277,7 @@ export function stepWalker(w: Walker, input: Input, dt: number, space: Space | n
         const dir = wall.clone().multiplyScalar(0.55).addScaledVector(fwd, 0.85).normalize();
         w.vel.addScaledVector(dir, 2.2);
         w.reach.right = 1;
+        w.push = 1;
         ev.pushOff?.(2.2);
       }
     }
@@ -249,24 +285,36 @@ export function stepWalker(w: Walker, input: Input, dt: number, space: Space | n
     w.reach.right *= Math.exp(-4 * dt);
   }
 
+  w.push *= Math.exp(-2.2 * dt);
+  w.jolt.multiplyScalar(Math.exp(-5 * dt));
   // Brake: grab the air (or, honestly, the thrusters fire against drift).
-  if (input.down('KeyX') || input.padDown(PAD.B)) w.vel.multiplyScalar(Math.exp(-3.5 * dt));
+  // The suit's thrusters fire against the drift: the jets show it.
+  if (input.down('KeyX') || input.padDown(PAD.B)) {
+    if (w.vel.lengthSq() > 1e-4) w.thrust.lerp(tmp.copy(w.vel).normalize().multiplyScalar(-THRUST), 1 - Math.exp(-12 * dt));
+    w.vel.multiplyScalar(Math.exp(-3.5 * dt));
+  }
   if (w.assist && !w.grip && !mx && !my && !mz) w.vel.multiplyScalar(Math.exp(-0.9 * dt));
   if (w.vel.length() > MAX && !w.grip) w.vel.setLength(THREE.MathUtils.lerp(w.vel.length(), MAX, 1 - Math.exp(-2 * dt)));
 
   if (input.hit('KeyV') || input.padHit(PAD.BACK)) w.assist = !w.assist;
 
-  if (!w.grip) w.pos.addScaledVector(w.vel, dt);
-  if (space) {
+  // Drift in short collision-checked steps (a slow frame must not carry you through a door).
+  const steps = Math.max(1, Math.ceil(dt / 0.035));
+  let bumped = 0;
+  for (let i = 0; i < steps; i++) {
+    if (!w.grip) w.pos.addScaledVector(w.vel, dt / steps);
+    if (!space) continue;
     const before = w.vel.length();
     if (space.resolveProps(w.pos, w.vel, w.radius, 0.5, 0.5)) w.contact = 1;
     const n = space.resolve(w.pos, w.vel, w.radius, 0.12);
     if (n) {
-      const hit = before - w.vel.length();
-      if (hit > 0.4) ev.bump?.(hit);
+      bumped = Math.max(bumped, before - w.vel.length());
       w.contact = 1;
-    } else w.contact *= Math.exp(-6 * dt);
+      // A wall knocks the limbs too: a brief jolt the other way, read by the animation.
+      w.jolt.addScaledVector(n, Math.min(8, (before - w.vel.length()) * 8));
+    } else w.contact *= Math.exp(-6 * (dt / steps));
   }
+  if (bumped > 0.4) ev.bump?.(bumped);
 
   // A held object rides in front of the hands; a click throws it.
   if (w.holding) {
@@ -285,43 +333,32 @@ export function stepWalker(w: Walker, input: Input, dt: number, space: Space | n
 }
 
 /** Gloves and sleeves: two suited hands in front of the camera. */
+/**
+ * First-person arms: suited forearms rising from the bottom of the view into articulated EVA gloves, held low
+ * and relaxed with the palms turned in. The same glove as the third-person astronaut.
+ */
 export function buildHands() {
+  const m = suitMaterials();
   const g = new THREE.Group();
-  const suit = new THREE.MeshStandardMaterial({ color: 0xe9e7e2, roughness: 0.8 });
-  const glove = new THREE.MeshStandardMaterial({ color: 0xf4f2ee, roughness: 0.65 });
-  const accent = new THREE.MeshStandardMaterial({ color: 0x836ef9, emissive: 0x3b2a8c, emissiveIntensity: 0.4, roughness: 0.5 });
-  const metal = new THREE.MeshStandardMaterial({ color: 0x9aa0aa, metalness: 0.8, roughness: 0.3 });
   const hand = (side: 1 | -1) => {
     const root = new THREE.Group();
-    // Forearm reaching in from below the frame, glove at its end.
-    const sleeve = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.06, 0.34, 14), suit);
-    sleeve.rotation.x = Math.PI / 2 - 0.5;
-    sleeve.position.set(0, -0.07, 0.12);
-    root.add(sleeve);
-    const stripe = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.018, 14), accent);
-    stripe.rotation.x = Math.PI / 2 - 0.5;
-    stripe.position.set(0, -0.035, 0.05);
-    root.add(stripe);
-    const cuff = new THREE.Mesh(new THREE.CylinderGeometry(0.047, 0.047, 0.03, 14), metal);
-    cuff.rotation.x = Math.PI / 2 - 0.5;
-    cuff.position.set(0, -0.01, 0.0);
-    root.add(cuff);
-    const palm = new THREE.Mesh(new THREE.BoxGeometry(0.075, 0.03, 0.085), glove);
-    palm.position.set(0, 0.01, -0.06);
-    palm.rotation.x = -0.3;
-    root.add(palm);
-    for (let i = 0; i < 4; i++) {
-      const f = new THREE.Mesh(new THREE.CapsuleGeometry(0.0095, 0.04, 4, 6), glove);
-      f.rotation.x = Math.PI / 2 - 0.7;
-      f.position.set(-0.027 + i * 0.018, 0.02, -0.115);
-      root.add(f);
+    // Forearm: from the wrist back and down out of the frame, with a purple index stripe and the wrist bearing.
+    const fore = new THREE.Group(); fore.rotation.x = 1.98; root.add(fore);
+    const sleeve = new THREE.Mesh(scaleUV(new THREE.CapsuleGeometry(0.05, 0.24, 8, 20), 2, 2), m.fabric); sleeve.position.y = 0.17; fore.add(sleeve);
+    const stripe = new THREE.Mesh(new THREE.CylinderGeometry(0.054, 0.054, 0.014, 24), m.accent); stripe.position.y = 0.09; fore.add(stripe);
+    const wb = bearing(0.05, 0.011); wb.position.y = 0.03; fore.add(wb);
+    if (side < 0) { // the wrist checklist, on the left forearm as on a real suit
+      const cl = new THREE.Mesh(new RoundedBoxGeometry(0.07, 0.09, 0.018, 2, 0.005), m.dark); cl.position.set(0.0, 0.14, -0.055); fore.add(cl);
+      const page = new THREE.Mesh(new THREE.PlaneGeometry(0.058, 0.076), new THREE.MeshStandardMaterial({ color: 0xf2efe6, roughness: 0.9 })); page.rotation.y = Math.PI; page.position.set(0, 0.14, -0.0645); fore.add(page);
     }
-    const thumb = new THREE.Mesh(new THREE.CapsuleGeometry(0.011, 0.03, 4, 6), glove);
-    thumb.rotation.z = side * 1.0;
-    thumb.position.set(side * -0.045, 0.012, -0.06);
-    root.add(thumb);
-    root.position.set(side * 0.21, -0.26, -0.5);
+    // The glove, flexed a little at the wrist so the fingers point forwards and slightly down.
+    const glove = buildGlove(side);
+    glove.group.rotation.x = 1.32;
+    root.add(glove.group);
+    root.rotation.z = side * 0.35;
+    root.position.set(side * 0.16, -0.2, -0.4);
     root.userData.rest = root.position.clone();
+    root.userData.glove = glove;
     return root;
   };
   const left = hand(-1), right = hand(1);
@@ -329,10 +366,31 @@ export function buildHands() {
   return { group: g, left, right };
 }
 
+/** Hands move with you: a gentle sway at rest, a counter-swing with each step, a reach and open fingers when you take hold of something. */
+const handLag = new THREE.Vector3(), invQ = new THREE.Quaternion();
+/**
+ * Hands move with you. Walking: a counter-swing with each step on the shared gait phase. Floating: they rise and
+ * come forward into the neutral posture, drift slowly, and trail the suit's thrust. Reaching for a rail or an
+ * object extends the arm and opens the fingers, which close once you hold on.
+ */
 export function animateHands(h: ReturnType<typeof buildHands>, w: Walker, t: number) {
-  const sway = Math.sin(t * 1.3) * 0.006;
-  for (const [hand, k] of [[h.left, w.reach.left], [h.right, w.reach.right]] as const) {
+  const speed = Math.min(1.6, Math.hypot(w.vel.x, w.vel.z) / 1.6);
+  const walking = w.moveMode === 'walk';
+  handLag.copy(w.thrust).applyQuaternion(invQ.copy(w.quat).invert()).multiplyScalar(walking ? 0 : -0.007);
+  for (const [hand, k, side] of [[h.left, w.reach.left, -1], [h.right, w.reach.right, 1]] as const) {
     const rest = hand.userData.rest as THREE.Vector3;
-    hand.position.set(rest.x * (1 - k * 0.3), rest.y + k * 0.12 + sway, rest.z - k * 0.18);
+    const swing = walking ? Math.sin(w.phase + (side > 0 ? 0 : Math.PI)) * 0.03 * Math.min(1, speed) : 0;
+    const bob = walking ? Math.abs(Math.cos(w.phase)) * 0.012 * speed : 0;
+    const drift = walking ? Math.sin(t * 1.3 + side) * 0.005 : Math.sin(t * 0.7 + side * 1.7) * 0.012;
+    const rise = walking ? 0 : 0.07, out = walking ? 0 : 0.03;
+    hand.position.set(
+      rest.x * (1 - k * 0.3) + side * out + handLag.x,
+      rest.y + k * 0.12 + drift - bob + rise + handLag.y,
+      rest.z - k * 0.18 + swing - rise * 0.6 + handLag.z,
+    );
+    hand.rotation.x = -swing * 1.5 - k * 0.25 + (walking ? 0 : -0.22);
+    const holding = !!w.gripPoint || !!w.holding;
+    const curl = k > 0.3 ? (holding ? 0.9 : 0.12) : walking ? 0.45 + speed * 0.1 : 0.3;
+    (hand.userData.glove as ReturnType<typeof buildGlove>).setCurl(curl, k > 0.3 && holding ? 0.8 : 0.35);
   }
 }

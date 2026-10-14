@@ -61,8 +61,8 @@ export function ShuttlePanel({ engine }: { engine: Engine }) {
     // The shuttle runs its launch sequence; when it has cleared the station, the flight continues in the galaxy.
     (engine as unknown as { hangar?: { ignite(done?: () => void): void } }).hangar?.ignite(() => {
       window.location.href = 'free' in to
-        ? `/galaxy?universe=${to.free}&flight=1`
-        : `/galaxy?universe=${to.universe}&fly=${to.address}&flight=1`;
+        ? `/galaxy?universe=${to.free}&flight=1&cockpit=1&arrival=1`
+        : `/galaxy?universe=${to.universe}&fly=${to.address}&flight=1&cockpit=1&arrival=1`;
     });
     engine.log.add(`flight-${'free' in to ? `free-${to.free}` : to.address}`, 'flight', 'free' in to ? `Free flight · ${UNIVERSES.find((u) => u.id === to.free)?.name}` : `Flight to $${to.symbol}`, 'The shuttle left the hangar for the Monad Constellation.');
   };

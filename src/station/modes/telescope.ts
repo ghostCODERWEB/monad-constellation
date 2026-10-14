@@ -16,6 +16,8 @@ import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import type { Engine } from '../engine';
+import { DECK } from '../world/station';
+import { UNIVERSES } from '@/lib/universes';
 import { PAD } from '../core/input';
 import { buildCosmos, CATALOG, dirOf, type Target } from '../world/cosmos';
 import { EARTH_R, ALTITUDE } from '../world/sky';
@@ -68,7 +70,9 @@ export interface TelescopeHud {
   hint: string | null;
   warning: string | null;
   slewing: boolean;
-  catalog: { id: string; name: string; kind: string; found: boolean; hidden: boolean }[];
+  catalog: { id: string; name: string; kind: string; found: boolean; hidden: boolean; group: string; size: number }[];
+  /** The Monad universes as catalog categories: each one's load state and how much of it you have observed. */
+  universes: { id: string; name: string; color: string; blurb: string; state: 'loading' | 'ready' | 'unavailable'; worlds: number; found: number }[];
   /** Whether the Monad token worlds have loaded (they come from the galaxy's Nansen data). */
   tokens: 'loading' | 'ready' | 'unavailable';
 }
@@ -84,17 +88,21 @@ export function installTelescope(e: Engine) {
   // The catalog: the sky's fixed objects, then Monad's token worlds once the galaxy data arrives.
   const catalog: Target[] = [...CATALOG];
   let tokensState: 'loading' | 'ready' | 'unavailable' = 'loading';
+  // Which category each catalog entry belongs to: 'sky' for the fixed objects, else its universe.
+  const groupOf = (t: Target) => t.token?.universe ?? (t.kind === 'universe' ? t.id.replace(/^universe-/, '') : 'sky');
+  const uState = new Map<string, 'loading' | 'ready' | 'unavailable'>(e.sky.monads.map((f) => [f.info.id, 'loading']));
   // Every universe in turn (Majors first): each is its own galaxy in the sky, with its worlds in the catalog.
   (async () => {
     let any = false;
     for (const field of e.sky.monads) {
       try {
         const r = await fetch(`/api/galaxy?u=${field.info.id}`);
-        if (!r.ok) continue;
+        if (!r.ok) { uState.set(field.info.id, 'unavailable'); continue; }
         const g = (await r.json()) as Galaxy;
         catalog.push(cosmos.universeTarget(field.info, g), ...cosmos.addTokens(g, field.load(g), field.info.name));
+        uState.set(field.info.id, 'ready');
         any = true; tokensState = 'ready';
-      } catch { /* this universe is unavailable; the others still load */ }
+      } catch { uState.set(field.info.id, 'unavailable'); /* the others still load */ }
     }
     if (!any) tokensState = 'unavailable';
   })();
@@ -138,16 +146,18 @@ export function installTelescope(e: Engine) {
     const normalMap = new THREE.CanvasTexture(normalFromHeight(B, 3)); normalMap.anisotropy = 16;
     return new THREE.MeshStandardMaterial({ map, normalMap, roughness: 0.55, metalness: 0.6 });
   };
-  const pedestal = new THREE.Mesh(G(new THREE.CylinderGeometry(0.16, 0.22, 1.4, 48), 4, 3), white);
-  pedestal.position.y = -0.8;
+  // The pier stands on the deck: the rig's origin is 0.8 m above it (telescopeBase), so the pier is 0.8 m tall.
+  const PIER = a.telescopeBase.y - DECK;
+  const pedestal = new THREE.Mesh(G(new THREE.CylinderGeometry(0.16, 0.22, PIER, 48), 4, 3), white);
+  pedestal.position.y = -PIER / 2;
   rig.add(pedestal);
-  for (const y of [-0.3, -1.3]) { // clamp bands with bolts
-    const band = new THREE.Mesh(G(new THREE.TorusGeometry(y > -1 ? 0.18 : 0.215, 0.012, 12, 48), 10, 1), metal);
+  for (const y of [-0.2, -PIER + 0.12]) { // clamp bands with bolts
+    const band = new THREE.Mesh(G(new THREE.TorusGeometry(y > -0.5 ? 0.18 : 0.215, 0.012, 12, 48), 10, 1), metal);
     band.rotation.x = Math.PI / 2; band.position.y = y - 0.0; rig.add(band);
   }
   const footRing = new THREE.Mesh(G(new THREE.TorusGeometry(0.28, 0.03, 16, 48), 12, 1), metal);
   footRing.rotation.x = Math.PI / 2;
-  footRing.position.y = -1.48;
+  footRing.position.y = -PIER + 0.03;
   rig.add(footRing);
   const azimuth = new THREE.Group();
   rig.add(azimuth);
@@ -270,10 +280,10 @@ export function installTelescope(e: Engine) {
   const consoleScreen = liveScreen(640, 400);
   const consoleGroup = new THREE.Group();
   const stand = new THREE.Mesh(G(new THREE.BoxGeometry(0.08, 1.0, 0.08), 1, 5), white);
-  stand.position.y = -0.7;
+  stand.position.y = -0.75;
   consoleGroup.add(stand);
   const base = new THREE.Mesh(G(new THREE.CylinderGeometry(0.16, 0.2, 0.04, 48), 4, 1), metal);
-  base.position.y = -1.21; consoleGroup.add(base);
+  base.position.y = -1.23; consoleGroup.add(base);
   const bezel = new THREE.Mesh(new RoundedBoxGeometry(0.86, 0.56, 0.05, 4, 0.012), new THREE.MeshPhysicalMaterial({ color: 0x15171b, roughness: 0.42, metalness: 0.15, clearcoat: 0.3, clearcoatRoughness: 0.35 }));
   consoleGroup.add(bezel);
   const screen = new THREE.Mesh(new THREE.PlaneGeometry(0.8, 0.5), new THREE.MeshBasicMaterial({ map: consoleScreen.texture }));
@@ -283,7 +293,7 @@ export function installTelescope(e: Engine) {
   cover.position.z = 0.0275; consoleGroup.add(cover);
   const arm = new THREE.Mesh(G(new THREE.CylinderGeometry(0.018, 0.018, 0.2, 20), 1, 1), metal);
   arm.rotation.x = Math.PI / 2; arm.position.z = -0.12; consoleGroup.add(arm);
-  consoleGroup.position.set(13.2, 0.1, -1.55);
+  consoleGroup.position.set(13.2, DECK + 1.25, -1.55); // screen at 1.25 m, base on the deck
   consoleGroup.rotation.y = 0.35;
   e.station.interior.add(consoleGroup);
 
@@ -484,7 +494,9 @@ export function installTelescope(e: Engine) {
       const dAz = Math.atan2(Math.sin(wantAz - mountAz), Math.cos(wantAz - mountAz));
       const speed = Math.abs(dAz) + Math.abs(wantAlt - mountAlt);
       mountAz += dAz * (1 - Math.exp(-3 * dt));
-      mountAlt += (THREE.MathUtils.clamp(wantAlt, -0.9, 1.2) - mountAlt) * (1 - Math.exp(-3 * dt));
+      // The tube stops at −34° and +46° so neither the dew shield nor the focuser end meets the deck;
+      // the view through the eyepiece is not limited by this.
+      mountAlt += (THREE.MathUtils.clamp(wantAlt, -0.6, 0.8) - mountAlt) * (1 - Math.exp(-3 * dt));
       if (speed > 0.01) e.sfx?.('motor', speed);
       // Keep the physical camera at the eyepiece.
       e.camera.position.copy(a.telescopeEye);
@@ -499,7 +511,14 @@ export function installTelescope(e: Engine) {
         mag, fov: fovNow(), ra: fmt(ra), dec: `${dec >= 0 ? '+' : '−'}${Math.abs(dec).toFixed(2)}°`, focus, tracking, filter,
         target: current ? { id: current.id, name: current.name, distance: current.distance, facts: current.facts, kind: current.kind, simulated: current.simulated, token: current.token ? { address: current.token.address, symbol: current.token.symbol } : undefined, resolved } : null,
         hint, warning, slewing: !!slew,
-        catalog: catalog.map((c) => ({ id: c.id, name: c.name, kind: c.kind, found: e.log.has(`seen-${c.id}`), hidden: false })),
+        catalog: catalog.map((c) => ({ id: c.id, name: c.name, kind: c.kind, found: e.log.has(`seen-${c.id}`), hidden: false, group: groupOf(c), size: c.size })),
+        universes: e.sky.monads.map((f) => {
+          const inU = catalog.filter((c) => c.token?.universe === f.info.id);
+          return {
+            id: f.info.id, name: f.info.name, color: f.info.color, blurb: UNIVERSES.find((u) => u.id === f.info.id)?.blurb ?? '',
+            state: uState.get(f.info.id) ?? 'loading', worlds: inU.length, found: inU.filter((c) => e.log.has(`seen-${c.id}`)).length,
+          };
+        }),
         tokens: tokensState,
       };
       return { telescope: hud, catalogOpen: api.catalogOpen };

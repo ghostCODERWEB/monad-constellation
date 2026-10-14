@@ -5,9 +5,13 @@
 // orbital-manoeuvring pods on the back, reaction-control thrusters round the
 // nose, and a glazed cockpit. Used by the station hangar and the galaxy.
 import * as THREE from 'three';
+import { DecalGeometry } from 'three/examples/jsm/geometries/DecalGeometry.js';
+import { loadNasaOrbiter, nasaMaterials } from './shuttleNasa';
 
 export interface Shuttle {
   group: THREE.Group;
+  /** First-person camera anchors in shuttle-local coordinates. */
+  cockpit: { eye: THREE.Vector3; target: THREE.Vector3; up: THREE.Vector3 };
   /** Engine exhaust points in the shuttle's local space. */
   nozzles: THREE.Vector3[];
   engineMats: THREE.MeshBasicMaterial[];
@@ -20,8 +24,12 @@ export interface Shuttle {
   rcs: { pos: THREE.Vector3; dir: THREE.Vector3 }[];
   /** Deflect the control surfaces: pitch, roll and yaw, each in −1…1. */
   setControl(pitch: number, roll: number, yaw: number): void;
+  /** Show the flight-deck interior (instrument panels, seats): only when the camera is inside the cockpit. */
+  setCockpitView(on: boolean): void;
   /** Extend the undercarriage, where 0 is fully stowed and 1 is weight-on-wheels. */
   setGear(k: number): void;
+  /** Drive the shader exhaust, including ignition flash and Mach diamonds. */
+  setThrust(throttle: number, time: number, ignition?: number): void;
   /** Distance from the model origin to the tyre contact patch, in model units. */
   gearDrop: number;
   /** Swap in better surfaces after the fact (the galaxy builds the PBR set only when you first fly). */
@@ -58,16 +66,6 @@ function hullTexture() {
   t.colorSpace = THREE.SRGBColorSpace;
   t.anisotropy = 8;
   return t;
-}
-
-function glowTexture(inner: string, outer: string) {
-  const c = document.createElement('canvas');
-  c.width = c.height = 128;
-  const g = c.getContext('2d')!;
-  const gr = g.createRadialGradient(64, 64, 0, 64, 64, 64);
-  gr.addColorStop(0, inner); gr.addColorStop(0.35, outer); gr.addColorStop(1, 'rgba(0,0,0,0)');
-  g.fillStyle = gr; g.fillRect(0, 0, 128, 128);
-  return new THREE.CanvasTexture(c);
 }
 
 // ---------- lofted aerodynamic surfaces ----------
@@ -199,8 +197,43 @@ function wordmarkTexture(text: string) {
   const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 16; return t;
 }
 
+function cockpitScreen(lines: string[], accent = '#00ffa7') {
+  const c = document.createElement('canvas'); c.width = 1024; c.height = 512;
+  const g = c.getContext('2d')!;
+  g.fillStyle = '#020908'; g.fillRect(0, 0, c.width, c.height);
+  g.strokeStyle = accent; g.lineWidth = 8; g.strokeRect(16, 16, c.width - 32, c.height - 32);
+  g.fillStyle = accent; g.font = '700 58px monospace';
+  lines.forEach((line, i) => g.fillText(line, 54, 105 + i * 92));
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
+}
+
+function plumeMaterial() {
+  return new THREE.ShaderMaterial({
+    uniforms: { uThrottle: { value: 0 }, uTime: { value: 0 }, uIgnition: { value: 0 } },
+    transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
+    vertexShader: `varying vec2 vUv; void main(){vUv=uv; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);}`,
+    fragmentShader: `
+      varying vec2 vUv; uniform float uThrottle; uniform float uTime; uniform float uIgnition;
+      float hash(float n){return fract(sin(n)*43758.5453);}
+      void main(){
+        float axial=vUv.y, radial=abs(vUv.x-.5)*2.;
+        float edge=(1.-smoothstep(.12,1.,radial))*(1.-smoothstep(.82,1.,axial));
+        float flick=.88+.12*sin(uTime*43.+axial*31.)+.05*hash(floor(uTime*55.)+axial*9.);
+        float diamonds=pow(max(0.,cos((axial*6.-uTime*.35)*6.283)),12.)*smoothstep(.35,.92,uThrottle);
+        vec3 outer=mix(vec3(1.,.22,.04),vec3(.36,.18,1.),smoothstep(.05,.8,axial));
+        vec3 core=mix(vec3(.35,.62,1.),vec3(1.),smoothstep(.15,.72,1.-radial));
+        vec3 col=mix(outer,core,1.-smoothstep(.05,.75,radial));
+        col+=diamonds*vec3(.75,.9,1.8)+uIgnition*vec3(1.8,.75,.2)*(1.-axial);
+        float alpha=edge*(.18+.72*uThrottle)*flick;
+        if(alpha<.015) discard; gl_FragColor=vec4(col,alpha);
+      }`,
+  });
+}
+
 export function buildShuttle(over: ShuttleMaterials = {}): Shuttle {
   const group = new THREE.Group();
+  // The procedural airframe is the fallback; NASA's orbiter replaces it as soon as that model has loaded.
+  const body = new THREE.Group(); body.name = 'procedural-body'; group.add(body);
 
   const paintDefault = new THREE.MeshPhysicalMaterial({
     map: hullTexture(), metalness: 0.45, roughness: 0.4, clearcoat: 0.6, clearcoatRoughness: 0.2, color: 0x9a93b8,
@@ -219,7 +252,7 @@ export function buildShuttle(over: ShuttleMaterials = {}): Shuttle {
 
   // Everything that takes a swappable surface registers here with its role.
   const roles: { mesh: THREE.Mesh; role: Role[] }[] = [];
-  const mesh = (geo: THREE.BufferGeometry, role: Role | Role[], parent: THREE.Object3D = group) => {
+  const mesh = (geo: THREE.BufferGeometry, role: Role | Role[], parent: THREE.Object3D = body) => {
     const rs = Array.isArray(role) ? role : [role];
     const m = new THREE.Mesh(geo, rs.length === 1 ? mats[rs[0]] : rs.map((r) => mats[r]));
     roles.push({ mesh: m, role: rs });
@@ -247,15 +280,46 @@ export function buildShuttle(over: ShuttleMaterials = {}): Shuttle {
   const mullionMat = mats.chrome;
   for (const x of [-0.172, 0, 0.172]) {
     const bar = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.012, 0.39), mullionMat);
-    bar.position.set(x, 0.286 - Math.abs(x) * 0.25, -0.55); group.add(bar);
+    bar.position.set(x, 0.286 - Math.abs(x) * 0.25, -0.55); body.add(bar);
   }
+
+  // Flight deck interior, sized to be read from the first-person camera.
+  // The exterior shell is front-sided, so from inside the modeled tub, frames,
+  // seats and instruments define the cabin while the six windows reveal space.
+  const cockpit = new THREE.Group(); cockpit.name = 'cockpit-interior'; cockpit.visible = false; group.add(cockpit);
+  const cabin = new THREE.MeshStandardMaterial({ color: 0x24272c, roughness: 0.72, metalness: 0.28 });
+  const padding = new THREE.MeshStandardMaterial({ color: 0x11151b, roughness: 0.94, metalness: 0.02 });
+  const frame = new THREE.MeshStandardMaterial({ color: 0xaeb5bf, roughness: 0.36, metalness: 0.82 });
+  const glow = (map: THREE.Texture, color: number) => new THREE.MeshBasicMaterial({ map, color, toneMapped: false });
+  const tub = new THREE.Mesh(new THREE.BoxGeometry(0.56, 0.18, 0.60), cabin); tub.position.set(0, -0.01, -0.43); cockpit.add(tub);
+  const dash = new THREE.Mesh(new THREE.BoxGeometry(0.50, 0.10, 0.16), cabin); dash.position.set(0, 0.12, -0.73); dash.rotation.x = -0.16; cockpit.add(dash);
+  for (const x of [-0.135, 0.135]) {
+    const seat = new THREE.Group(); seat.position.set(x, 0.03, -0.26); cockpit.add(seat);
+    const back = new THREE.Mesh(new THREE.BoxGeometry(0.20, 0.31, 0.08), padding); back.position.y = 0.04; back.rotation.x = -0.13; seat.add(back);
+    const base = new THREE.Mesh(new THREE.BoxGeometry(0.20, 0.07, 0.20), padding); base.position.set(0, -0.13, -0.05); seat.add(base);
+    for (const sx of [-0.07, 0.07]) { const rail = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.008, 0.34, 10), frame); rail.position.set(sx, 0.02, 0); seat.add(rail); }
+  }
+  const screenMaps = [cockpitScreen(['NANSEN × MONAD', 'FLIGHT COMPUTER', 'NAV: STANDBY']), cockpitScreen(['RCS  NOMINAL', 'CLAMPS  SAFE', 'DATA  NANSEN'], '#836ef9')];
+  for (const [i, x] of [-0.13, 0.13].entries()) {
+    const bezel = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.13, 0.025), padding); bezel.position.set(x, 0.155, -0.815); bezel.rotation.x = -0.13; cockpit.add(bezel);
+    const screen = new THREE.Mesh(new THREE.PlaneGeometry(0.19, 0.10), glow(screenMaps[i], i ? 0xb9a8ff : 0x9effdb)); screen.position.set(x, 0.155, -0.800); screen.rotation.x = -0.13; cockpit.add(screen);
+  }
+  // Glare shield, overhead switch bank and strong window mullions.
+  const glare = new THREE.Mesh(new THREE.BoxGeometry(0.54, 0.035, 0.18), padding); glare.position.set(0, 0.225, -0.68); cockpit.add(glare);
+  const overhead = new THREE.Mesh(new THREE.BoxGeometry(0.40, 0.035, 0.25), cabin); overhead.position.set(0, 0.285, -0.49); overhead.rotation.x = 0.16; cockpit.add(overhead);
+  for (let i = 0; i < 18; i++) {
+    const sw = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.012, 0.025), new THREE.MeshBasicMaterial({ color: i % 4 === 0 ? 0xf5c542 : 0x7affc4, toneMapped: false }));
+    sw.position.set(-0.16 + (i % 9) * 0.04, 0.262, -0.56 + Math.floor(i / 9) * 0.07); cockpit.add(sw);
+  }
+  for (const x of [-0.19, 0, 0.19]) { const m = new THREE.Mesh(new THREE.BoxGeometry(0.018, 0.34, 0.035), frame); m.position.set(x, 0.22, -0.70); m.rotation.x = -0.12; cockpit.add(m); }
+  const cockpitAnchors = { eye: new THREE.Vector3(0, 0.18, -0.39), target: new THREE.Vector3(0, 0.17, -1.8), up: new THREE.Vector3(0, 1, 0) };
 
   // Large flank wordmarks are separate decal meshes so they stay legible from the gangway.
   const livery = new THREE.MeshBasicMaterial({ map: wordmarkTexture('MONAD'), transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, side: THREE.DoubleSide });
   for (const side of [-1, 1]) {
     const d = new THREE.Mesh(new THREE.PlaneGeometry(0.92, 0.18), livery);
     d.rotation.y = side > 0 ? Math.PI / 2 : -Math.PI / 2;
-    d.position.set(side * 0.298, 0.015, 0.10); group.add(d);
+    d.position.set(side * 0.298, 0.015, 0.10); body.add(d);
   }
 
   // Delta wings: strake and main panel, with elevons that move.
@@ -314,25 +378,25 @@ export function buildShuttle(over: ShuttleMaterials = {}): Shuttle {
     bogie.position.y = main ? -0.255 : -0.225; root.add(bogie);
     for (const dx of main ? [-0.075, 0.075] : [0]) {
       const wheel = new THREE.Mesh(new THREE.CylinderGeometry(0.058, 0.058, 0.035, 20), tyre);
-      wheel.rotation.z = Math.PI / 2; wheel.position.set(dx, main ? -0.29 : -0.26, 0); root.add(wheel);
+      wheel.rotation.z = Math.PI / 2; wheel.position.set(dx, -0.29, 0); root.add(wheel);
     }
     const door = mesh(new THREE.BoxGeometry(main ? 0.22 : 0.11, 0.012, main ? 0.22 : 0.20), 'wingBottom');
     door.position.set(x, -0.176, z); gearDoors.push({ mesh: door, side: x >= 0 ? 1 : -1 });
   };
-  makeGear(0, -0.77, false); makeGear(-0.43, 0.28, true); makeGear(0.43, 0.28, true);
-  const gearDrop = 0.435;
+  makeGear(0, -0.75, false); makeGear(-0.27, 0.05, true); makeGear(0.27, 0.05, true);
+  const gearDrop = 0.493;
   for (let i = 0; i < gearRoots.length; i++) { gearRoots[i].visible = false; gearRoots[i].rotation.x = i === 0 ? 1.42 : -1.30; }
 
   // Wing-tip navigation lights: red port, green starboard, and a dorsal strobe on the fin.
   const blinkers: Shuttle['blinkers'] = [];
   for (const side of [1, -1]) {
     const nav = new THREE.Mesh(new THREE.SphereGeometry(0.018, 10, 10), new THREE.MeshBasicMaterial({ color: side > 0 ? 0x4ade80 : 0xf87171 }));
-    nav.position.set(side * 0.76, -0.11, 0.48);
+    nav.position.set(side * 0.735, -0.14, 0.66);
     group.add(nav);
     blinkers.push({ mesh: nav, phase: side > 0 ? 0 : 0.5 });
   }
   const strobe = new THREE.Mesh(new THREE.SphereGeometry(0.016, 8, 8), new THREE.MeshBasicMaterial({ color: 0xffffff }));
-  strobe.position.set(0, 0.67, 0.67);
+  strobe.position.set(0, 0.40, 0.86);
   group.add(strobe);
   blinkers.push({ mesh: strobe, phase: 0.25 });
 
@@ -343,36 +407,33 @@ export function buildShuttle(over: ShuttleMaterials = {}): Shuttle {
     const podGeo = new THREE.LatheGeometry(podProfile, 32); podGeo.rotateX(Math.PI / 2);
     const pod = mesh(podGeo, 'nacelle'); pod.scale.set(1.15, 1.0, 1.25); pod.position.set(side * 0.22, 0.17, 0.43);
     const nz = new THREE.Mesh(new THREE.ConeGeometry(0.026, 0.06, 20, 1, true), bronzeSide);
-    nz.rotation.x = -Math.PI / 2; nz.position.set(side * 0.22, 0.17, 0.70); group.add(nz);
+    nz.rotation.x = -Math.PI / 2; nz.position.set(side * 0.22, 0.17, 0.70); body.add(nz);
   }
 
   // Three main engines in a triangle at the tail: housing, bell, glowing core and plume.
   const nozzles: THREE.Vector3[] = [];
   const engineMats: THREE.MeshBasicMaterial[] = [];
   const plumes: THREE.Mesh[] = [];
-  const plumeTex = glowTexture('rgba(255,255,255,1)', 'rgba(150,120,255,0.6)');
   const bellProfile = ([[0.018, 0.0], [0.024, 0.025], [0.034, 0.06], [0.05, 0.115], [0.062, 0.16]] as const).map(([r, z]) => new THREE.Vector2(r, z));
-  for (const [x, y] of [[0, 0.07], [-0.105, -0.055], [0.105, -0.055]] as const) {
+  for (const [x, y] of [[0, -0.0475], [-0.0975, -0.1375], [0.0975, -0.1375]] as const) {
     const housing = new THREE.Mesh(new THREE.CylinderGeometry(0.058, 0.066, 0.1, 24), mats.nacelle);
     roles.push({ mesh: housing, role: ['nacelle'] });
-    housing.rotation.x = Math.PI / 2; housing.position.set(x, y, 0.83); group.add(housing);
+    housing.rotation.x = Math.PI / 2; housing.position.set(x, y, 0.83); body.add(housing);
     const bellGeo = new THREE.LatheGeometry(bellProfile, 32); bellGeo.rotateX(Math.PI / 2);
     const bell = mesh(Object.assign(bellGeo, {}), 'bell'); bell.position.set(x, y, 0.81);
     (bell.material as THREE.Material).side = THREE.DoubleSide;
     const core = new THREE.MeshBasicMaterial({ color: 0xc9bbff });
     const disc = new THREE.Mesh(new THREE.CircleGeometry(0.03, 20), core);
-    disc.position.set(x, y, 0.865); disc.rotation.y = Math.PI; group.add(disc);
+    disc.position.set(x, y, 0.968); disc.rotation.y = Math.PI; group.add(disc);
     engineMats.push(core);
     const plumeGeo = new THREE.ConeGeometry(0.06, 1, 20, 1, true);
     plumeGeo.translate(0, -0.5, 0);
     plumeGeo.rotateX(-Math.PI / 2); // tip trails backwards (+Z)
-    const plume = new THREE.Mesh(plumeGeo, new THREE.MeshBasicMaterial({
-      color: 0x9d8cff, map: plumeTex, transparent: true, opacity: 0.48, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
-    }));
-    plume.position.set(x, y, 0.99);
+    const plume = new THREE.Mesh(plumeGeo, plumeMaterial());
+    plume.position.set(x, y, 0.985);
     group.add(plume);
     plumes.push(plume);
-    nozzles.push(new THREE.Vector3(x, y, 1.01));
+    nozzles.push(new THREE.Vector3(x, y, 1.0));
   }
 
   // Reaction-control thrusters round the nose, mid-body and tail; also a docking probe and a belly antenna.
@@ -384,9 +445,9 @@ export function buildShuttle(over: ShuttleMaterials = {}): Shuttle {
       const pos = new THREE.Vector3(Math.sin(a) * r, Math.cos(a) * r * 0.72, z);
       const dir = new THREE.Vector3(Math.sin(a), Math.cos(a), 0).normalize();
       const nz = new THREE.Mesh(new THREE.ConeGeometry(0.012, 0.03, 16, 1, true), bronzeSide);
-      nz.position.copy(pos); nz.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir); group.add(nz);
+      nz.position.copy(pos); nz.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir); body.add(nz);
       const hole = new THREE.Mesh(new THREE.CircleGeometry(0.0095, 16), dark);
-      hole.position.set(pos.x * 1.12, pos.y * 1.12, pos.z); hole.lookAt(pos.x * 3, pos.y * 3, pos.z); group.add(hole);
+      hole.position.set(pos.x * 1.12, pos.y * 1.12, pos.z); hole.lookAt(pos.x * 3, pos.y * 3, pos.z); body.add(hole);
       rcs.push({ pos, dir });
     }
   }
@@ -405,10 +466,56 @@ export function buildShuttle(over: ShuttleMaterials = {}): Shuttle {
   rimL.position.set(-1.2, 0.3, 0.8);
   group.add(rimL);
 
+  // ---- the real orbiter ----
+  let disposedNasa = false;
+  loadNasaOrbiter().then((parts) => {
+    if (disposedNasa) return;
+    const M = nasaMaterials();
+    const nasa = new THREE.Group(); nasa.name = 'nasa-orbiter';
+    const hull = new THREE.Mesh(parts.hull, M.hull);
+    for (const [g, m] of [[parts.glass, M.glass], [parts.metal, M.metal]] as const) nasa.add(new THREE.Mesh(g, m));
+    nasa.add(hull);
+    group.add(nasa);
+    body.visible = false;
+    // Flank wordmarks and the tail registration are projected onto the real skin as decals.
+    hull.updateMatrixWorld(true);
+    const ray = new THREE.Raycaster();
+    const decal = (from: THREE.Vector3, dir: THREE.Vector3, size: THREE.Vector3, map: THREE.Texture, roll = 0) => {
+      ray.set(from, dir.clone().normalize());
+      const hit = ray.intersectObject(hull, false)[0];
+      if (!hit || !hit.face) return;
+      const n = hit.face.normal.clone().transformDirection(hull.matrixWorld);
+      const probe = new THREE.Object3D(); probe.position.copy(hit.point); probe.lookAt(hit.point.clone().add(n)); probe.rotateZ(roll);
+      const dm = new THREE.Mesh(
+        new DecalGeometry(hull, hit.point, probe.rotation, size),
+        new THREE.MeshStandardMaterial({ map, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4, roughness: 0.5 }),
+      );
+      nasa.add(dm);
+    };
+    const mark = wordmarkTexture('MONAD'), reg = wordmarkTexture('NX-1001');
+    for (const side of [1, -1]) decal(new THREE.Vector3(side * 1.5, -0.04, -0.03), new THREE.Vector3(-side, 0, 0), new THREE.Vector3(0.78, 0.16, 0.5), mark);
+    // Registration number on the fin, both faces.
+    for (const side of [1, -1]) decal(new THREE.Vector3(side * 0.6, 0.27, 0.8), new THREE.Vector3(-side, 0, 0), new THREE.Vector3(0.3, 0.07, 0.4), reg);
+    // Flight-deck anchors move to the real flight deck behind the windscreens.
+    cockpitAnchors.eye.set(0, 0.043, -0.70); cockpitAnchors.target.set(0, 0.06, -3);
+    // The flight deck in the real orbiter is about 0.2 wide, so the interior is scaled down to sit inside it.
+    cockpit.scale.setScalar(0.38); cockpit.position.set(0, 0.043 - 0.38 * 0.18, -0.70 + 0.38 * 0.39);
+    // Thrusters sit on the real skin: nose ring, forward ring, aft ring.
+    const rings: [number, number, number, number][] = [[-0.98, 0.05, 0.04, -0.06], [-0.55, 0.15, 0.13, -0.05], [0.62, 0.19, 0.16, -0.05]];
+    rings.forEach(([z, rx, ry, cy], r) => {
+      for (let i = 0; i < 4; i++) {
+        const a = (i / 4) * Math.PI * 2 + Math.PI / 4;
+        rcs[r * 4 + i].pos.set(Math.sin(a) * rx, cy + Math.cos(a) * ry, z);
+        rcs[r * 4 + i].dir.set(Math.sin(a), Math.cos(a), 0).normalize();
+      }
+    });
+  }).catch((e) => console.warn('NASA orbiter failed to load; keeping the procedural shuttle.', e));
+
   const MAX_DEFLECT = 0.42;
   const tmpQ = new THREE.Quaternion();
   return {
-    group, nozzles, engineMats, plumes, blinkers, light, rcs, gearDrop,
+    setCockpitView(on) { cockpit.visible = on; },
+    group, cockpit: cockpitAnchors, nozzles, engineMats, plumes, blinkers, light, rcs, gearDrop,
     setControl(pitch, roll, yaw) {
       // Elevons move together for pitch (trailing edge down for nose-down) and in opposition for roll.
       for (const e of elevons) {
@@ -425,6 +532,17 @@ export function buildShuttle(over: ShuttleMaterials = {}): Shuttle {
         root.rotation.x = (1 - k) * (i === 0 ? 1.42 : -1.30);
       }
       for (const d of gearDoors) d.mesh.rotation.z = d.side * Math.sin(k * Math.PI) * 1.05;
+    },
+    setThrust(throttle, time, ignition = 0) {
+      const k = THREE.MathUtils.clamp(throttle, 0, 1);
+      for (const plume of plumes) {
+        const mat = plume.material as THREE.ShaderMaterial;
+        mat.uniforms.uThrottle.value = k; mat.uniforms.uTime.value = time; mat.uniforms.uIgnition.value = ignition;
+        plume.visible = k > 0.005 || ignition > 0.005;
+        plume.scale.set(0.8 + k * 0.55, 0.8 + k * 0.55, 0.08 + k * 2.2);
+      }
+      light.intensity = (k * 2.2 + ignition * 7) * (0.9 + Math.sin(time * 47) * 0.08);
+      engineMats.forEach((m) => m.color.setHSL(0.62 + (1 - k) * 0.08, 0.82, 0.46 + k * 0.42));
     },
     applyMaterials(m) {
       Object.assign(mats, m);

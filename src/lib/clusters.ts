@@ -13,7 +13,10 @@ export interface Cluster {
   planet: number;
   /** Star indexes of the member wallets. */
   members: number[];
-  kind: 'funded' | 'ring';
+  /** funded: shared first funder. ring: a directed cycle of transfers among
+   *  them (A→B→…→A). transfer: connected by transfers today, with no cycle:
+   *  a relationship, not evidence of coordination. */
+  kind: 'funded' | 'ring' | 'transfer';
   /** The shared first funder, for funded clusters. */
   funder: { address: string; name: string; star: number | null } | null;
   /** Combined share of the token's supply. */
@@ -136,7 +139,8 @@ async function build(universe: UniverseId): Promise<ClusterReport> {
       });
     }
 
-    // Rings: top holders passing the token between themselves today.
+    // Transfer groups: top holders connected by today's sampled transfers.
+    // Only a directed cycle among them earns the name "ring".
     const parent = new Map<number, number>();
     const find = (x: number): number => { const px = parent.get(x) ?? x; if (px === x) return x; const r = find(px); parent.set(x, r); return r; };
     for (const t of established ? [] : trailsHere) {
@@ -152,13 +156,16 @@ async function build(universe: UniverseId): Promise<ClusterReport> {
       if (members.length < 2) continue;
       const share = members.reduce((s, i) => s + shareOf(i), 0);
       const n = transfersAmong(members);
+      const cyclic = hasCycle(members, trailsHere);
       clusters.push({
-        id: `${planet.symbol}:ring:${galaxy.stars[members[0]].address}`,
-        planet: p, members, kind: 'ring', funder: null,
+        id: `${planet.symbol}:${cyclic ? 'ring' : 'transfer'}:${galaxy.stars[members[0]].address}`,
+        planet: p, members, kind: cyclic ? 'ring' : 'transfer', funder: null,
         share, holdingUsd: members.reduce((s, i) => s + usdOf(i), 0),
         transfers: n,
-        severity: share >= 0.05 ? 'high' : 'medium',
-        evidence: `${members.length} top holders moved $${planet.symbol} between each other ${n} time${n > 1 ? 's' : ''} today.`,
+        severity: cyclic && share >= 0.05 ? 'high' : 'medium',
+        evidence: cyclic
+          ? `${members.length} top holders passed $${planet.symbol} round in a cycle (${n} transfer${n > 1 ? 's' : ''} in today's sampled trades).`
+          : `${members.length} top holders are connected by ${n} transfer${n > 1 ? 's' : ''} of $${planet.symbol} in today's sampled trades. A relationship, not proof of coordination.`,
         alsoIn: [],
       });
     }
@@ -179,3 +186,24 @@ async function build(universe: UniverseId): Promise<ClusterReport> {
 }
 
 export const getClusters = (universe: UniverseId = 'majors') => cached(`clusters-${universe}`, TTL, () => build(universe));
+
+/** Whether today's transfers among `members` contain a directed cycle (A→B→…→A). */
+export function hasCycle(members: number[], trails: { from: number; to: number }[]): boolean {
+  const set = new Set(members);
+  const out = new Map<number, number[]>();
+  for (const t of trails) {
+    if (t.from === t.to || !set.has(t.from) || !set.has(t.to)) continue;
+    out.set(t.from, [...(out.get(t.from) ?? []), t.to]);
+  }
+  const state = new Map<number, 1 | 2>(); // 1 on the stack, 2 done
+  const visit = (v: number): boolean => {
+    state.set(v, 1);
+    for (const w of out.get(v) ?? []) {
+      const st = state.get(w);
+      if (st === 1 || (st === undefined && visit(w))) return true;
+    }
+    state.set(v, 2);
+    return false;
+  };
+  return members.some((m) => state.get(m) === undefined && visit(m));
+}

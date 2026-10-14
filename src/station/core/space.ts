@@ -5,8 +5,8 @@
 import * as THREE from 'three';
 
 export type Volume =
-  | { kind: 'box'; name: string; min: THREE.Vector3; max: THREE.Vector3; zone: string }
-  | { kind: 'cyl'; name: string; axis: 'x' | 'y' | 'z'; a: number; b: number; c1: number; c2: number; r: number; zone: string };
+  | { kind: 'box'; name: string; min: THREE.Vector3; max: THREE.Vector3; zone: string; closed?: boolean }
+  | { kind: 'cyl'; name: string; axis: 'x' | 'y' | 'z'; a: number; b: number; c1: number; c2: number; r: number; zone: string; closed?: boolean };
 
 const other = (axis: 'x' | 'y' | 'z'): ['x' | 'y' | 'z', 'x' | 'y' | 'z'] => (axis === 'x' ? ['y', 'z'] : axis === 'y' ? ['x', 'z'] : ['x', 'y']);
 
@@ -18,6 +18,8 @@ export function cyl(name: string, zone: string, axis: 'x' | 'y' | 'z', a: number
 }
 
 export function inside(v: Volume, p: THREE.Vector3, pad: number) {
+  // A doorway volume whose door is shut is not air.
+  if (v.closed) return false;
   if (v.kind === 'box') {
     return p.x >= v.min.x + pad && p.x <= v.max.x - pad && p.y >= v.min.y + pad && p.y <= v.max.y - pad && p.z >= v.min.z + pad && p.z <= v.max.z - pad;
   }
@@ -70,6 +72,7 @@ export class Space {
     if (this.contains(pos, pad)) return null;
     let bestD = Infinity;
     for (const v of this.volumes) {
+      if (v.closed) continue;
       clampInto(v, pos, pad, this.tmp);
       const d = this.tmp.distanceToSquared(pos);
       if (d < bestD) { bestD = d; this.best.copy(this.tmp); }

@@ -9,16 +9,21 @@ import { labelTexture } from '../world/textures';
 import { pbrSet, recolouredPaint, scaleUV } from '../world/pbr';
 import { shuttleMaterials } from '../world/shuttlePbr';
 import { addPanelMode } from './panel';
+import { DECK } from '../world/station';
+import type { Doors } from './doors';
 
 const LENGTH = 8.8;
-const DECK_Y = -4;
+/** The bay shares the station's deck. */
+const DECK_Y = DECK;
+/** How far each bay door leaf slides: its full width, into the pocket outside the side wall. */
+const DOOR_SLIDE = 6;
 
 /** The ?from= return-flight parameters, read once per page load: React may mount the station twice in development. */
-let arrivalOnce: { from: string | null; sym: string | null } | null = null;
+let arrivalOnce: { from: string | null; sym: string | null; returning: boolean; cockpit: boolean } | null = null;
 function arrival() {
   if (!arrivalOnce) {
     const p = new URLSearchParams(window.location.search);
-    arrivalOnce = { from: p.get('from'), sym: p.get('sym') };
+    arrivalOnce = { from: p.get('from'), sym: p.get('sym'), returning: p.get('return') === '1', cockpit: p.get('cockpit') === '1' };
   }
   return arrivalOnce;
 }
@@ -39,7 +44,7 @@ export function installHangar(e: Engine) {
   ship.group.position.copy(dock); ship.group.position.y = DECK_Y + ship.gearDrop * k;
   ship.group.rotation.y = Math.PI;
   ship.light.intensity = 6; ship.light.distance = 6; ship.light.decay = 2;
-  for (const p of ship.plumes) p.scale.z = 0.001;
+  ship.setThrust(0, 0);
   bay.add(ship.group);
 
   // A marked stand on the deck replaces the old raised cradle. The ship carries
@@ -74,14 +79,16 @@ export function installHangar(e: Engine) {
   const hose = (from: THREE.Vector3, to: THREE.Vector3, color: number) => {
     // Built about its wall end so it can reel back into the panel by scaling to nothing.
     const g = new THREE.Group(); g.position.copy(from);
-    const a = new THREE.Vector3(), b = to.clone().sub(from), mid = b.clone().multiplyScalar(0.5); mid.y -= 0.8;
+    // Down from the panel to the deck, along the deck, and up to the ship's service port: nothing crosses the walkway in the air.
+    const a = new THREE.Vector3(), b = to.clone().sub(from);
+    const down = new THREE.Vector3(-0.25, DECK_Y + 0.07 - from.y, 0), across = new THREE.Vector3(b.x + 0.5, DECK_Y + 0.07 - from.y, b.z), up = new THREE.Vector3(b.x + 0.25, b.y - 0.35, b.z);
     const m = pbrSet('rubber', { color, normal: 1.5 });
-    g.add(new THREE.Mesh(scaleUV(new THREE.TubeGeometry(new THREE.CatmullRomCurve3([a, mid, b]), 48, 0.06, 12, false), 24, 1), m));
+    g.add(new THREE.Mesh(scaleUV(new THREE.TubeGeometry(new THREE.CatmullRomCurve3([a, down, across, up, b], false, 'centripetal'), 64, 0.06, 12, false), 24, 1), m));
     for (const p of [a, b]) { const c = new THREE.Mesh(new THREE.CylinderGeometry(0.085, 0.085, 0.14, 24), steel); c.position.copy(p); g.add(c); }
     bay.add(g); hoses.push(g);
   };
-  hose(new THREE.Vector3(5.72, -1.3, dock.z + 0.8), new THREE.Vector3(dock.x + 0.30 * k, ship.group.position.y + 0.05 * k, dock.z + 0.15 * k), 0x1f2937);
-  hose(new THREE.Vector3(5.72, -2.1, dock.z - 0.4), new THREE.Vector3(dock.x + 0.31 * k, ship.group.position.y - 0.08 * k, dock.z - 0.24 * k), 0x7c2d12);
+  hose(new THREE.Vector3(5.72, DECK_Y + 1.0, dock.z + 0.8), new THREE.Vector3(dock.x + 0.30 * k, ship.group.position.y + 0.05 * k, dock.z + 0.15 * k), 0x1f2937);
+  hose(new THREE.Vector3(5.72, DECK_Y + 0.75, dock.z - 0.4), new THREE.Vector3(dock.x + 0.31 * k, ship.group.position.y - 0.08 * k, dock.z - 0.24 * k), 0x7c2d12);
   for (const x of [-1, 1]) for (const dz of [-0.34, 0.34]) {
     const chock = new THREE.Mesh(scaleUV(new THREE.BoxGeometry(0.34, 0.20, 0.25), 1, 1), yellow);
     chock.rotation.x = dz > 0 ? 0.25 : -0.25;
@@ -97,7 +104,7 @@ export function installHangar(e: Engine) {
   tug.add(wheels);
   const tow = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 2.2, 14), steel); tow.rotation.x = Math.PI / 2; tow.position.set(-2.6, DECK_Y + 0.14, -14.5); bay.add(tow);
   const board = new THREE.Mesh(new THREE.PlaneGeometry(3.6, 1), new THREE.MeshBasicMaterial({ map: labelTexture(['FLIGHT CONTROL · UNIVERSE / TOKEN', 'USE WALL CONSOLE · DEFAULT: MAJORS'], { bg: '#0b0618', fg: '#c4b5fd', w: 1024, h: 284, font: 42, border: '#836ef9' }) }));
-  board.position.set(-5.9, 1.6, -16.2);
+  board.position.set(-5.9, DECK_Y + 3.1, -16.2);
   board.rotation.y = Math.PI / 2;
   bay.add(board);
 
@@ -106,7 +113,8 @@ export function installHangar(e: Engine) {
   // back through the doors tail-first, turn outside, then light the mains.
   const STAGES: [number, string][] = [[0, 'Pre-launch checks'], [0.3, 'Umbilicals released'], [0.7, 'Bay doors opening'], [1.8, 'RCS liftoff'], [2.6, 'Tail-first pushback'], [4.7, 'Turning outside the bay'], [5.6, 'Main engines'], [6.5, 'Departing']];
   const DONE_AT = 7.2;
-  let ignited = false, launchT = 0, speed = 0, onDone: (() => void) | null = null, finished = false, igniteSfx = false;
+  const LAUNCH_PACE = 1.35;
+  let ignited = false, launchT = 0, onDone: (() => void) | null = null, finished = false, igniteSfx = false;
   const base = new THREE.Vector3(), parkedYaw = ship.group.rotation.y;
   const ease = (x: number) => { const c = THREE.MathUtils.clamp(x, 0, 1); return c * c * (3 - 2 * c); };
   (e as unknown as { hangar: { ignite(done?: () => void): void; stage(): { label: string; t: number } } }).hangar = {
@@ -116,6 +124,20 @@ export function installHangar(e: Engine) {
   const { hangarLeft, hangarRight } = e.station.doors;
   const doorX = hangarRight.position.x;
   const beacon = bay.getObjectByName('bay-beacon') as THREE.Mesh | undefined;
+  // The bay's pressure state drives H-1's lock and the bay console: one source of truth.
+  const doors = () => (e as unknown as { doors?: Doors }).doors;
+  let bayState = '';
+  const setBay = (state: 'pressurised' | 'depressurising' | 'open' | 'repressurising') => {
+    if (state === bayState) return;
+    bayState = state;
+    doors()?.lock('H-1', state !== 'pressurised');
+    const s = e.station.bayScreen;
+    if (state === 'pressurised') s.draw(['DOORS CLOSED', 'BAY PRESSURISED', 'H-1 RELEASED'], 'ok');
+    else if (state === 'depressurising') s.draw(['H-1 LOCKED', 'DEPRESSURISING', 'STAND CLEAR'], 'warn');
+    else if (state === 'open') s.draw(['H-1 LOCKED', 'BAY OPEN TO SPACE', 'DOORS OPEN'], 'alert');
+    else s.draw(['DOORS CLOSED', 'REPRESSURISING', 'H-1 LOCKED'], 'warn');
+  };
+  setBay('pressurised');
 
   // Reaction-control puffs: short-lived additive sprites shot out of the thrusters along their firing direction.
   const puffTex = (() => { const c = document.createElement('canvas'); c.width = c.height = 64; const g = c.getContext('2d')!; const gr = g.createRadialGradient(32, 32, 0, 32, 32, 32); gr.addColorStop(0, 'rgba(255,255,255,0.95)'); gr.addColorStop(0.4, 'rgba(190,210,255,0.5)'); gr.addColorStop(1, 'rgba(0,0,0,0)'); g.fillStyle = gr; g.fillRect(0, 0, 64, 64); return new THREE.CanvasTexture(c); })();
@@ -149,31 +171,36 @@ export function installHangar(e: Engine) {
   // Coming home from the Constellation (/?from=<token>&sym=<symbol>): the
   // shuttle enters nose-first without yawing, extends its gear, translates to
   // the offset stand on RCS, lands, settles, clamps and connects.
-  const { from, sym } = arrival();
+  const { from, sym, returning, cockpit: returnCockpit } = arrival();
   let arriving = -1;
-  if (from && /^0x[0-9a-fA-F]{40}$/.test(from)) {
-    const label = sym && /^[\w.-]{1,20}$/.test(sym) ? `$${sym}` : `${from.slice(0, 6)}…`;
+  const validFrom = from && /^0x[0-9a-fA-F]{40}$/.test(from);
+  if (returning || validFrom) {
+    const label = validFrom ? (sym && /^[\w.-]{1,20}$/.test(sym) ? `$${sym}` : `${from!.slice(0, 6)}…`) : 'free flight';
+    if (validFrom) {
     e.setSubject({ kind: 'token', address: from, label, source: 'flight' });
+    }
     e.log.add(`flight-back-${from}-${new Date().toISOString().slice(0, 13)}`, 'flight', `Back from ${label}`, `The shuttle docked after a run to ${label} in the Monad Constellation.`);
     e.say(`Welcome back from ${label}. Docking…`, 5);
     arriving = 0;
-    hangarLeft.position.x = -doorX - 5.5; hangarRight.position.x = doorX + 5.5;
-    const watch = bay.localToWorld(new THREE.Vector3(-4.4, DECK_Y + 1.55, -13.4));
-    e.walker.pos.copy(watch);
-    e.walker.quat.setFromEuler(new THREE.Euler(-0.05, Math.PI / 2, 0)); // on the deck, looking towards the doors
+    hangarLeft.position.x = -doorX - DOOR_SLIDE; hangarRight.position.x = doorX + DOOR_SLIDE;
+    // The bay is open to space, so you watch from the walkway, behind the gallery window beside H-1.
+    e.walker.pos.set(1.25, DECK_Y + 1.55, -1.2);
+    e.walker.quat.setFromEuler(new THREE.Euler(-0.05, Math.PI / 2, 0));
     e.walker.yaw = Math.PI / 2; e.walker.pitch = -0.08;
     window.history.replaceState(null, '', '/');
   }
   const parked = ship.group.position.clone();
-  const FLY = 9, DOORS_AT = 10.8, DOORS_FOR = 3.0, END = 14.2;
-  const arriveStages: [number, string][] = [[0, 'Approaching nose-first'], [3.5, 'Landing gear extending'], [5, 'RCS stand alignment'], [7, 'Touchdown'], [9.2, 'Clamps engaged, umbilicals connected'], [DOORS_AT, 'Bay doors closing'], [13.5, 'Bay pressurised']];
+  const DOORS_AT = 10.8, DOORS_FOR = 3.0, SEALED = DOORS_AT + DOORS_FOR, PRESS_AT = SEALED + 1.2, END = PRESS_AT + 0.3;
+  // Pressure comes back only after the doors have sealed; H-1 releases with it.
+  const arriveStages: [number, string][] = [[0, 'Approaching nose-first'], [3.5, 'Landing gear extending'], [5, 'RCS stand alignment'], [7, 'Touchdown'], [9.2, 'Clamps engaged, umbilicals connected'], [DOORS_AT, 'Bay doors closing'], [SEALED, 'Doors sealed, repressurising'], [PRESS_AT, 'Bay pressurised']];
   let arrStage = -1;
   if (arriving >= 0) { ship.setGear(0); setLamps(0xff3030, 1.6); for (const h of hoses) { h.scale.setScalar(0.001); h.visible = false; } }
 
   e.tickers.push((dt, t) => {
+    ship.setCockpitView(e.mode.id === 'shuttle' || e.mode.id === 'shuttle-docking');
     for (const b of ship.blinkers) b.mesh.visible = Math.sin(t * 4 + b.phase) > 0.6;
     if (arriving >= 0 && !ignited) {
-      arriving += dt;
+      arriving += e.cineDt;
       const T = arriving;
       const stage = arriveStages.reduce((n, [t0], i) => (T >= t0 ? i : n), 0);
       if (stage !== arrStage) {
@@ -187,8 +214,8 @@ export function installHangar(e: Engine) {
       // A restrained aerodynamic flare; yaw remains fixed for the entire arrival.
       ship.group.rotation.set(0.10 * (ease((T - 4.2) / 1.3) - touchdown), parkedYaw, 0);
       ship.setGear(ease((T - 3.5) / 2.2));
-      const thr = Math.max(0, 1 - ease((T - 0.5) / 5.0));
-      for (const p of ship.plumes) p.scale.z = 0.001 + thr * (0.9 + Math.random() * 0.2);
+            // Final docking is cold-gas only: main engines remain dark inside the bay.
+      ship.setThrust(0, T);
       if (T > 4.7 && T < 7.4) pulseRcs(dt, noseSide(1));
       if (T > 6.1 && T < 9) pulseRcs(dt, lower);
       stepPuffs(dt);
@@ -197,13 +224,16 @@ export function installHangar(e: Engine) {
       for (const h of hoses) { h.visible = reach > 0; h.scale.setScalar(Math.max(0.001, reach)); }
       // Then the doors close, on a smooth curve rather than a chase.
       const shut = ease((T - DOORS_AT) / DOORS_FOR);
-      hangarLeft.position.x = -doorX - (1 - shut) * 5.5; hangarRight.position.x = doorX + (1 - shut) * 5.5;
-      if (beacon) (beacon.material as THREE.MeshStandardMaterial).emissiveIntensity = T < 13 ? 0.4 + 0.9 * Math.abs(Math.sin(T * 5)) : 0.9;
+      hangarLeft.position.x = -doorX - (1 - shut) * DOOR_SLIDE; hangarRight.position.x = doorX + (1 - shut) * DOOR_SLIDE;
+      setBay(T < SEALED ? 'open' : T < PRESS_AT ? 'repressurising' : 'pressurised');
+      if (beacon) (beacon.material as THREE.MeshStandardMaterial).emissiveIntensity = T < SEALED ? 0.4 + 0.9 * Math.abs(Math.sin(T * 5)) : 0.9;
       if (T >= END) {
         arriving = -1;
-        for (const p of ship.plumes) p.scale.z = 0.001;
+        setBay('pressurised');
+        ship.setThrust(0, T);
         hangarLeft.position.x = -doorX; hangarRight.position.x = doorX;
         for (const h of hoses) { h.visible = true; h.scale.setScalar(1); }
+        if (e.mode.id === 'shuttle-docking') e.setMode('walk');
       }
       return;
     }
@@ -232,16 +262,19 @@ export function installHangar(e: Engine) {
       hangarLeft.position.x = -hangarRight.position.x;
     }
     if (ignited) {
-      // Keep the cinematic brisk even in the throttled preview pane.
-      launchT += dt * 1.35;
+      // Timeline seconds run at a declared pace on real time: DONE_AT (7.2) takes
+      // 5.3 s at LAUNCH_PACE, 1.6 s with reduced motion, at any frame rate.
+      launchT += e.cineDt * (reduced ? 4.5 : LAUNCH_PACE);
       const T = launchT;
+      // H-1 locks before anything else; the bay vents before the doors move.
+      setBay(T < 0.65 ? 'depressurising' : 'open');
       // 0–: checks. The beacon pulses; the umbilicals reel in.
       if (beacon) (beacon.material as THREE.MeshStandardMaterial).emissiveIntensity = 0.4 + 0.9 * Math.abs(Math.sin(T * 5));
       if (T > 0.25) setLamps(0xffb020, 1.6 * (0.6 + 0.4 * Math.sin(T * 8)));
       const reel = ease((T - 0.25) / 0.55);
       for (const h of hoses) { h.scale.setScalar(Math.max(0.001, 1 - reel)); h.visible = reel < 1; }
       const door = ease((T - 0.65) / 1.25);
-      hangarLeft.position.x = -doorX - door * 5.5; hangarRight.position.x = doorX + door * 5.5;
+      hangarLeft.position.x = -doorX - door * DOOR_SLIDE; hangarRight.position.x = doorX + door * DOOR_SLIDE;
       // The ship rises vertically before any undercarriage retracts.
       const lift = ease((T - 1.7) / 0.8);
       if (T > 1.7 && T < 2.8) pulseRcs(dt, lower);
@@ -256,10 +289,13 @@ export function installHangar(e: Engine) {
       // Main engines light only after the ship has cleared the pressure doors.
       const burn = ease((T - 5.55) / 0.45);
       if (T > 5.55 && !igniteSfx) { igniteSfx = true; e.sfx?.('ignite'); }
-      for (const p of ship.plumes) p.scale.z = 0.001 + burn * (1.2 + Math.random() * 0.25);
-      for (const m of ship.engineMats) m.color.setScalar(0.6 + burn * 0.9);
-      ship.light.intensity = 6 + burn * 10;
-      if (T > 5.75) { speed += 13 * dt; ship.group.position.x -= speed * dt; ship.group.position.z -= speed * dt * 0.25; }
+      const flash = Math.max(0, 1 - Math.abs(T - 5.62) / 0.16);
+      ship.setThrust(burn, T, flash);
+      // Departure under constant acceleration, as a function of time (not
+      // accumulated per frame), so the path is the same at any frame rate.
+      const away = T > 5.75 ? 0.5 * 13 * (T - 5.75) ** 2 : 0;
+      ship.group.position.x = base.x - away;
+      ship.group.position.z -= away * 0.25;
       ship.group.position.y = base.y + lift * 0.78 + (T > 5.7 ? Math.min(0.4, (T - 5.7) * 0.25) : 0);
       ship.setControl(T > 4.55 ? 0.10 : 0, 0, turn * 0.18);
       if (T > DONE_AT && !finished) { finished = true; onDone?.(); }
@@ -270,16 +306,29 @@ export function installHangar(e: Engine) {
     ship.setGear(1);
   });
 
-  // Framed from the gangway side: nose, windows, landing gear and livery all read clearly.
-  const eyeLocal = new THREE.Vector3(-2.4, -1.5, -12.6);
-  const aimLocal = new THREE.Vector3(dock.x, ship.group.position.y + 0.25, dock.z + 0.4);
+  // Boarding places the camera in the flight deck. During the launch the view
+  // remains attached to the hull, so pushback, ignition and departure are a ride.
+  const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   const eye = new THREE.Vector3(), aim = new THREE.Vector3();
   const cleanup = addPanelMode(e, 'shuttle', 'Shuttle', () => {
-    bay.localToWorld(eye.copy(eyeLocal));
-    if (ignited) ship.group.getWorldPosition(aim); else bay.localToWorld(aim.copy(aimLocal));
-    return { eye, target: aim };
+    ship.group.localToWorld(eye.copy(ship.cockpit.eye));
+    ship.group.localToWorld(aim.copy(ship.cockpit.target));
+    if (ignited && !reduced && launchT > 5.55) {
+      const shake = Math.min(0.018, (launchT - 5.55) * 0.025);
+      eye.x += (Math.random() - 0.5) * shake; eye.y += (Math.random() - 0.5) * shake;
+    }
+    return { eye, target: aim, fov: 68, near: 0.01 };
+  }, () => {
+    if (!ignited || finished) return false;
+    finished = true; onDone?.(); return true;
   });
   e.interactions.add({ id: 'shuttle', label: 'board the shuttle', position: bay.localToWorld(new THREE.Vector3(dock.x - 1.35, DECK_Y + 1.0, dock.z + 2.8)), reach: 3.2, enabled: () => arriving < 0 && !ignited, use: () => e.setMode('shuttle') });
   e.interactions.add({ id: 'hangar-console', label: 'plan a shuttle flight', position: e.station.anchors.hangarConsole.clone(), reach: 1.8, use: () => e.setMode('shuttle') });
-  return cleanup;
+  const dockingCleanup = addPanelMode(e, 'shuttle-docking', 'Docking · Esc to skip', () => {
+    ship.group.localToWorld(eye.copy(ship.cockpit.eye));
+    ship.group.localToWorld(aim.copy(ship.cockpit.target));
+    return { eye, target: aim, fov: 68, near: 0.01 };
+  }, () => { arriving = END; return false; });
+  if (arriving >= 0 && returnCockpit) e.setMode('shuttle-docking');
+  return () => { cleanup(); dockingCleanup(); };
 }

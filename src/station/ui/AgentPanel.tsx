@@ -6,13 +6,14 @@
 // trades or touches a wallet: it is research only.
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import type { Engine, Subject } from '../engine';
+import { SseReader } from '@/lib/sse';
 import type { Robot } from '../features/robot';
 
-interface Msg { role: 'you' | 'ai'; text: string; tools: string[]; mode?: 'fast' | 'expert'; error?: string; done?: boolean; credits?: number; about?: string }
-interface Status { connected: boolean; credits: { fast: number; expert: number }; cap: number; remaining?: number }
+interface Msg { role: 'you' | 'ai'; text: string; tools: string[]; mode?: 'fast' | 'expert'; error?: string; done?: boolean; stopped?: boolean; credits?: number; about?: string; note?: string }
+interface Status { connected: boolean; credits: { fast: number; expert: number }; budget: number; remaining: number }
 
 // The conversation outlives the panel: closing it and coming back keeps the thread.
-const memory: { msgs: Msg[]; conversationId: string | null; draft: string } = { msgs: [], conversationId: null, draft: '' };
+const memory: { msgs: Msg[]; conversationId: string | null; draft: string; unsent: string; convoAbout: string | null } = { msgs: [], conversationId: null, draft: '', unsent: '', convoAbout: null };
 
 /** Open the robot with a question drafted (not sent: each question costs credits, so the player sends it). */
 export function askAgent(engine: Engine, text: string) {
@@ -72,7 +73,9 @@ export function AgentPanel({ engine }: { engine: Engine }) {
   const robot = (engine as unknown as { robot?: Robot }).robot;
   const [status, setStatus] = useState<Status | null>(null);
   const [msgs, setMsgs] = useState<Msg[]>(memory.msgs);
-  const [text, setText] = useState(() => { const d = memory.draft; memory.draft = ''; return d; });
+  // A question drafted from elsewhere (the PC) wins; otherwise restore what was being typed.
+  const [text, setTextRaw] = useState(() => { const d = memory.draft || memory.unsent; memory.draft = ''; return d; });
+  const setText = (v: string) => { memory.unsent = v; setTextRaw(v); };
   const [expert, setExpert] = useState(false);
   const [busy, setBusy] = useState(false);
   // The robot knows what you're researching aboard; you can drop that to ask in general.
@@ -80,21 +83,40 @@ export function AgentPanel({ engine }: { engine: Engine }) {
   const scroller = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLTextAreaElement>(null);
   const abort = useRef<AbortController | null>(null);
+  const [view, setViewState] = useState(robot?.view ?? 1);
+  const setView = (v: number) => { setViewState(v); if (robot) robot.view = v; };
+  useEffect(() => { robot?.react('nod'); }, [robot]);
 
-  useEffect(() => { fetch('/api/agent').then((r) => r.json()).then(setStatus).catch(() => setStatus({ connected: false, credits: { fast: 200, expert: 750 }, cap: 0 })); }, []);
-  const outOfQuestions = status?.remaining === 0;
-  useEffect(() => { memory.msgs = msgs; scroller.current?.scrollTo({ top: scroller.current.scrollHeight }); }, [msgs]);
+  useEffect(() => { fetch('/api/agent').then((r) => r.json()).then(setStatus).catch(() => setStatus({ connected: false, credits: { fast: 200, expert: 750 }, budget: 0, remaining: 0 })); }, []);
+  const price = status ? (expert ? status.credits.expert : status.credits.fast) : expert ? 750 : 200;
+  /** Why a question can't be sent right now, or null. Every send path checks this. */
+  const blocked = !status ? 'Connecting…' : !status.connected ? 'Not connected' : busy ? 'Answering…' : status.remaining < price ? `Today's budget is spent (${status.remaining} of ${status.budget} credits left)` : null;
+  useEffect(() => {
+    memory.msgs = msgs;
+    // Follow the answer only if the reader is already at the bottom.
+    const el = scroller.current;
+    if (el && el.scrollHeight - el.scrollTop - el.clientHeight < 120) el.scrollTo({ top: el.scrollHeight });
+  }, [msgs]);
   useEffect(() => { input.current?.focus(); return () => { abort.current?.abort(); if (robot) { robot.talking = false; robot.thinking = false; } }; }, [robot]);
 
   const patch = (f: (m: Msg) => Msg) => setMsgs((all) => [...all.slice(0, -1), f(all[all.length - 1])]);
 
   async function ask(q: string) {
     q = q.trim();
-    if (!q || busy) return;
+    if (!q || blocked) return;
     const mode = expert ? 'expert' : 'fast';
+    // The upstream conversation remembers its subject; if the subject changed
+    // (or was cleared), start a new conversation rather than let "it" mean the old one.
+    const aboutKey = about?.address ?? null;
+    let note: string | undefined;
+    if (memory.conversationId && memory.convoAbout !== aboutKey) {
+      memory.conversationId = null;
+      note = about ? `New conversation about ${about.label}.` : 'New conversation: no subject.';
+    }
     setText('');
+    if (robot) robot.listening = false;
     setBusy(true);
-    setMsgs((all) => [...all, { role: 'you', text: q, tools: [], about: about?.label }, { role: 'ai', text: '', tools: [], mode }]);
+    setMsgs((all) => [...all, { role: 'you', text: q, tools: [], about: about?.label, note }, { role: 'ai', text: '', tools: [], mode }]);
     if (robot) robot.thinking = true;
     const ctl = new AbortController();
     abort.current = ctl;
@@ -111,36 +133,41 @@ export function AgentPanel({ engine }: { engine: Engine }) {
       patch((m) => ({ ...m, credits: charged }));
       const reader = r.body.getReader();
       const dec = new TextDecoder();
-      let buf = '';
-      for (;;) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        buf += dec.decode(value, { stream: true });
-        let cut;
-        while ((cut = buf.indexOf('\n')) >= 0) {
-          const line = buf.slice(0, cut).trim();
-          buf = buf.slice(cut + 1);
-          if (!line.startsWith('data:')) continue;
-          const data = line.slice(5).trim();
+      const sse = new SseReader();
+      let got = false;
+      const handle = (events: string[]) => {
+        for (const data of events) {
           if (data === '[DONE]') continue;
           let ev: { type?: string; text?: string; name?: string; conversation_id?: string; tool_calls?: unknown[]; error?: string };
           try { ev = JSON.parse(data); } catch { continue; }
           if (ev.type === 'delta' && ev.text) {
+            got = true;
             if (robot) { robot.thinking = false; robot.talking = true; }
             patch((m) => ({ ...m, text: m.text + ev.text }));
           } else if (ev.type === 'tool_call' && ev.name) {
             patch((m) => (m.tools.includes(ev.name!) ? m : { ...m, tools: [...m.tools, ev.name!] }));
           } else if (ev.type === 'finish') {
-            if (ev.conversation_id) memory.conversationId = ev.conversation_id;
+            if (ev.conversation_id) { memory.conversationId = ev.conversation_id; memory.convoAbout = aboutKey; }
           } else if (ev.type === 'error') {
+            got = true;
             patch((m) => ({ ...m, error: ev.error ?? 'The Nansen agent reported an error.' }));
           }
         }
+      };
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        handle(sse.push(dec.decode(value, { stream: true })));
       }
-      patch((m) => ({ ...m, done: true }));
+      handle(sse.push(dec.decode()));
+      handle(sse.end());
+      robot?.react(got ? 'nod' : 'alert');
+      patch((m) => ({ ...m, done: true, error: m.error ?? (got ? undefined : 'The agent finished without an answer. Nothing to show; try asking again.') }));
       engine.log.add(`ask-${Date.now()}`, 'research', 'Asked Nansen AI', about ? `${q} (about ${about.label})` : q);
     } catch (err) {
-      if ((err as Error).name !== 'AbortError') patch((m) => ({ ...m, error: (err as Error).message, done: true }));
+      // Stopped by the player (or the panel closed): keep what arrived, marked as stopped.
+      if ((err as Error).name === 'AbortError') patch((m) => ({ ...m, done: true, stopped: true }));
+      else patch((m) => ({ ...m, error: `Connection lost: ${(err as Error).message}`, done: true }));
     } finally {
       setBusy(false);
       if (robot) { robot.thinking = false; robot.talking = false; }
@@ -148,8 +175,7 @@ export function AgentPanel({ engine }: { engine: Engine }) {
   }
 
   const close = () => engine.setMode('walk');
-  const fresh = () => { memory.conversationId = null; setMsgs([]); };
-  const cost = status ? (expert ? status.credits.expert : status.credits.fast) : expert ? 750 : 200;
+  const fresh = () => { memory.conversationId = null; memory.convoAbout = null; setMsgs([]); };
 
   return (
     <section className="agent" aria-label="Nansen AI chat">
@@ -158,6 +184,9 @@ export function AgentPanel({ engine }: { engine: Engine }) {
         <div>
           <b>NANSEN AI</b>
           <span>{status === null ? 'Connecting…' : status.connected ? 'Nansen Research Agent · Monad focus' : 'Not connected'}</span>
+        </div>
+        <div className="agent-views" role="group" aria-label="Camera view">
+          {['Face', 'Body', 'Full'].map((n, i) => <button key={n} className={view === i ? 'on' : ''} onClick={() => setView(i)} title={`Camera: ${n} (Alt+${i + 1})`}>{n}</button>)}
         </div>
         <button className="agent-new" onClick={fresh} disabled={busy || msgs.length === 0} title="Start a new conversation">New</button>
         <button className="agent-x" onClick={close} aria-label="Close">✕</button>
@@ -174,23 +203,25 @@ export function AgentPanel({ engine }: { engine: Engine }) {
               {(about ? (about.kind === 'token'
                 ? [`What is smart money doing with ${about.label} right now?`, `Who are the biggest holders of ${about.label}, and are any connected?`, `What are the main risks for ${about.label}?`]
                 : [`What does the wallet ${about.label} trade, and is it profitable?`, `Which wallets is ${about.label} connected to?`, `What did ${about.label} buy or sell in the last week?`]
-              ) : SUGGEST).map((s) => <button key={s} onClick={() => ask(s)} disabled={busy || status?.connected === false}>{s}</button>)}
+              ) : SUGGEST).map((s) => <button key={s} onClick={() => { setText(s); input.current?.focus(); }} disabled={status?.connected === false} title="Puts the question in the box: you send it">{s}</button>)}
             </div>
           </div>
         )}
         {msgs.map((m, i) => (
           <article key={i} className={`agent-msg ${m.role}`}>
+            {m.role === 'you' && m.note && <p className="agent-note-sys">{m.note}</p>}
             {m.role === 'you' ? <p>{m.text}{m.about && <em className="agent-tag">re {m.about}</em>}</p> : (
               <>
                 {m.tools.length > 0 && <div className="agent-tools">{m.tools.map((t) => <span key={t}>⚙ {pretty(t)}</span>)}</div>}
-                {m.text ? <Rich text={m.text} /> : !m.error && <p className="agent-wait">{m.tools.length ? 'Querying Nansen data…' : 'Thinking…'}</p>}
+                {m.text ? <Rich text={m.text} /> : !m.error && !m.done && <p className="agent-wait">{m.tools.length ? 'Querying Nansen data…' : 'Thinking…'}</p>}
+                {m.stopped && <p className="agent-stopped">{m.text ? 'Stopped: the answer above is partial.' : 'Stopped before an answer arrived.'} Credits may still have been charged.</p>}
                 {m.error && (
                   <p className="agent-err">
                     {m.error}
                     {/account' permission|insufficient_scope/.test(m.error) && <><br />Fix: open <a href="https://app.nansen.ai/api" target="_blank" rel="noreferrer">app.nansen.ai/api</a>, give this key the <b>account</b> permission (the Research Agent needs it), then ask again.</>}
                   </p>
                 )}
-                {m.done && !m.error && <footer>Source: Nansen Research Agent ({m.mode}){m.credits ? ` · ${m.credits} credits` : ''} · research only, not financial advice</footer>}
+                {m.done && !m.error && !m.stopped && <footer>Source: Nansen Research Agent ({m.mode}){m.credits ? ` · ${m.credits} credits` : ''} · research only, not financial advice</footer>}
               </>
             )}
           </article>
@@ -206,7 +237,8 @@ export function AgentPanel({ engine }: { engine: Engine }) {
         )}
         <textarea
           ref={input} value={text} rows={2} maxLength={2000} placeholder="Ask about Monad…"
-          onChange={(ev) => setText(ev.target.value)}
+          onChange={(ev) => { setText(ev.target.value); if (robot && !busy) robot.listening = ev.target.value.length > 0; }}
+          onBlur={() => { if (robot) robot.listening = false; }}
           onKeyDown={(ev) => { if (ev.key === 'Enter' && !ev.shiftKey) { ev.preventDefault(); ask(text); } }}
           disabled={status?.connected === false}
         />
@@ -214,8 +246,8 @@ export function AgentPanel({ engine }: { engine: Engine }) {
           <label title="Expert runs deeper multi-step analysis; it costs more credits and takes longer.">
             <input type="checkbox" checked={expert} onChange={(ev) => setExpert(ev.target.checked)} /> Expert
           </label>
-          <span>{cost} Nansen credits a question{status?.remaining != null ? ` · ${status.remaining} of ${status.cap} left today` : ''}</span>
-          {busy ? <button type="button" onClick={() => abort.current?.abort()}>Stop</button> : <button type="submit" disabled={!text.trim() || status?.connected === false || outOfQuestions}>Ask</button>}
+          <span>{blocked && !busy ? blocked : `About ${price} Nansen credits · ${status?.remaining ?? '…'} of ${status?.budget ?? '…'} left today`}</span>
+          {busy ? <button type="button" onClick={() => abort.current?.abort()}>Stop</button> : <button type="submit" disabled={!text.trim() || !!blocked}>Ask</button>}
         </div>
       </form>
     </section>

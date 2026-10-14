@@ -2,6 +2,7 @@
 // station in metres), the mode stack, interactions, bodies and the HUD feed.
 // Exactly one mode updates per frame; every mode returns to "walk" on Esc.
 import * as THREE from 'three';
+import { disposeTree } from '@/lib/gpu';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
@@ -87,6 +88,11 @@ export class Engine {
   private toast: { text: string; until: number } | null = null;
   private el: HTMLElement;
   subject: Subject | null = null;
+  /** Real elapsed seconds this frame for scripted sequences (see loop). */
+  cineDt = 0;
+  /** First-person hands: a separate scene that follows the camera (see the constructor). */
+  private handScene = new THREE.Scene();
+  private handRig = new THREE.Group();
   /** A mode can take over rendering entirely (the telescope eyepiece). */
   renderOverride: ((dt: number) => boolean) | null = null;
   /** Per-frame hooks for features: telescope motors, screens, eggs. */
@@ -112,7 +118,8 @@ export class Engine {
     this.scene.add(this.camera);
     const pm = new THREE.PMREMGenerator(this.renderer);
     this.scene.environment = pm.fromScene(interiorEnvironment(), 0.03).texture;
-    this.scene.environmentIntensity = 0.42;
+    // Reflections only: the room's light should come from its own fixtures, not a generic environment.
+    this.scene.environmentIntensity = 0.3;
 
     this.sky = buildSky();
     this.station = buildStation();
@@ -120,7 +127,14 @@ export class Engine {
     this.bodies = new Bodies(this.station.space);
     this.walker = createWalker(this.station.anchors.spawn);
     this.hands = buildHands();
-    this.camera.add(this.hands.group);
+    // The hands live in their own small scene, drawn after ambient occlusion: screen-space AO reads
+    // anything this close to the lens as buried in a corner and paints it black.
+    this.handRig.add(this.hands.group);
+    this.handScene.add(this.handRig);
+    this.handScene.environment = this.scene.environment;
+    this.handScene.environmentIntensity = 0.45;
+    this.handScene.add(new THREE.HemisphereLight(0xfff6ea, 0x6b7280, 0.9));
+    const key = new THREE.DirectionalLight(0xfff1e0, 1.1); key.position.set(0.4, 1, 0.3); this.handRig.add(key, key.target);
 
     this.sun = new THREE.DirectionalLight(0xfff4e0, 2.2);
     // Sunlight through the windows casts real shadows: a 28 m box that follows the player, so texels stay fine.
@@ -134,7 +148,7 @@ export class Engine {
     this.scene.add(this.sun, this.sun.target);
     this.earthlight = new THREE.HemisphereLight(0x1a1630, 0x5d8ad6, 0.45);
     this.scene.add(this.earthlight);
-    this.scene.add(new THREE.AmbientLight(0x2a2440, 0.25));
+    this.scene.add(new THREE.AmbientLight(0x2a2440, 0.1));
 
     this.composer = new EffectComposer(this.renderer);
     const skyPass = new RenderPass(this.sky.scene, this.sky.camera);
@@ -149,6 +163,10 @@ export class Engine {
     this.ao.updateGtaoMaterial({ radius: 0.6, distanceExponent: 1.4, thickness: 1.2, scale: 1, samples: 12 });
     this.ao.updatePdMaterial({ lumaPhi: 10, depthPhi: 2, normalPhi: 3, radius: 5, rings: 2, samples: 12 });
     this.composer.addPass(this.ao);
+    const handPass = new RenderPass(this.handScene, this.camera);
+    handPass.clear = false;
+    handPass.clearDepth = true;
+    this.composer.addPass(handPass);
     this.bloom = new UnrealBloomPass(new THREE.Vector2(el.clientWidth, el.clientHeight), 0.32, 0.35, 0.95);
     this.composer.addPass(this.bloom);
     this.composer.addPass(new OutputPass());
@@ -190,7 +208,13 @@ export class Engine {
   private loop = () => {
     this.raf = requestAnimationFrame(this.loop);
     this.clock.update();
-    const dt = Math.min(0.05, this.clock.getDelta());
+    const raw = this.clock.getDelta();
+    // Physics steps are capped for stability. Scripted sequences (launch,
+    // docking) read cineDt instead: real elapsed time, so they keep their
+    // declared duration at 14 fps as at 60, capped at 0.25 s so a hidden tab
+    // (no frames) pauses a sequence rather than skipping it.
+    const dt = Math.min(0.05, raw);
+    this.cineDt = Math.min(0.25, raw);
     this.t += dt;
     this.input.poll();
     // Universal exit: Esc (or the pad's B / Start) always returns to walking.
@@ -209,6 +233,8 @@ export class Engine {
   /** The default mode: float, look, grab, use. */
   private walk(dt: number, t: number) {
     const w = this.walker;
+    // Movement runs on real time (sub-stepped inside the walker), so walking pace is the same at 10 fps as at 60.
+    dt = Math.min(0.25, Math.max(dt, this.cineDt));
     stepWalker(w, this.input, dt, this.station.space, this.station.rails, this.bodies, {
       pushOff: () => this.sfx?.('push'),
       grab: () => this.sfx?.('grab'),
@@ -223,10 +249,15 @@ export class Engine {
     // Head-bob: a small vertical sway in step with the stride, only while walking in first person.
     if (w.moveMode === 'walk' && w.view === 'first') {
       const sp = Math.hypot(w.vel.x, w.vel.z);
-      this.bob += (Math.min(1, sp / 2.4) - this.bob) * (1 - Math.exp(-8 * dt));
-      this.camera.position.y += Math.sin(w.stride * 5.2) * 0.022 * this.bob;
-      this.camera.position.addScaledVector(new THREE.Vector3(1, 0, 0).applyQuaternion(w.quat), Math.cos(w.stride * 2.6) * 0.012 * this.bob);
+      this.bob += (Math.min(1.3, sp / 2.4) - this.bob) * (1 - Math.exp(-8 * dt));
+      // One bob per step, a side sway once per cycle: the same gait phase that moves the legs.
+      this.camera.position.y += Math.sin(w.phase * 2) * 0.022 * this.bob;
+      this.camera.position.addScaledVector(new THREE.Vector3(1, 0, 0).applyQuaternion(w.quat), Math.cos(w.phase) * 0.012 * this.bob);
     }
+    // A touch more field of view at a run, so speed reads; it eases back to 72° (which also restores it after panels).
+    const runK = w.moveMode === 'walk' ? THREE.MathUtils.clamp((Math.hypot(w.vel.x, w.vel.z) - 3) / 2, 0, 1) : 0;
+    const fovWant = 72 + 6 * runK;
+    if (Math.abs(this.camera.fov - fovWant) > 0.01) { this.camera.fov += (fovWant - this.camera.fov) * (1 - Math.exp(-5 * dt)); this.camera.updateProjectionMatrix(); }
     this.focus = this.interactions.focus(w.pos, look);
     if (this.focus && (this.input.hit('KeyE') || this.input.padHit(3))) this.focus.use();
     // Bodies noticed up close (Easter eggs log themselves).
@@ -257,9 +288,14 @@ export class Engine {
   private chaseCamera(w: Walker) {
     const back = new THREE.Vector3(0, 0, 1).applyQuaternion(w.quat);
     const cand = new THREE.Vector3();
+    const probe = new THREE.Vector3();
+    // The camera backs off only as far as it can still see the astronaut: every point on the line
+    // from the head to the camera must be inside the rooms, so it never peeks through a wall.
     for (let d = 2.9; d >= 0.45; d -= 0.25) {
       cand.copy(w.pos).addScaledVector(back, d).y += 0.35 * (d / 2.9);
-      if (this.station.space.contains(cand, 0.1)) break;
+      let clear = true;
+      for (let k = 1; k <= 12 && clear; k++) clear = this.station.space.contains(probe.lerpVectors(w.pos, cand, k / 12), 0.1);
+      if (clear) break;
     }
     this.camera.position.copy(cand);
   }
@@ -272,6 +308,8 @@ export class Engine {
     // Aboard, the hull's outside faces would wall off every hatch; outside, it is the station.
     this.station.hull.visible = !this.station.space.contains(this.camera.position, 0);
     if (this.renderOverride?.(dt)) return;
+    this.camera.updateMatrixWorld();
+    this.camera.matrixWorld.decompose(this.handRig.position, this.handRig.quaternion, this.handRig.scale);
     this.sky.update(this.t, this.camera.getWorldQuaternion(new THREE.Quaternion()), el.clientWidth / el.clientHeight, this.camera.fov);
     // Sunlight through the windows follows the orbit and dies in Earth's shadow.
     this.sun.position.copy(this.camera.position).addScaledVector(this.sky.sunDir, 30);
@@ -342,19 +380,9 @@ export class Engine {
     this.renderer.domElement.removeEventListener('click', this.onClick);
     this.input.dispose();
     // Free every GPU resource the scenes hold (React remounts and hot reloads would otherwise leak them).
-    const freed = new Set<unknown>();
-    const free = (o: THREE.Object3D) => {
-      const m = o as THREE.Mesh;
-      if (m.geometry && !freed.has(m.geometry)) { freed.add(m.geometry); m.geometry.dispose(); }
-      for (const mat of (Array.isArray(m.material) ? m.material : m.material ? [m.material] : []) as THREE.Material[]) {
-        if (freed.has(mat)) continue;
-        freed.add(mat);
-        for (const v of Object.values(mat)) if (v && (v as THREE.Texture).isTexture && !freed.has(v)) { freed.add(v); (v as THREE.Texture).dispose(); }
-        mat.dispose();
-      }
-    };
-    this.scene.traverse(free); this.sky.scene.traverse(free);
-    (this.scene.environment as THREE.Texture | null)?.dispose();
+    const freed = disposeTree(this.scene);
+    disposeTree(this.sky.scene, freed);
+    disposeTree(this.handScene, freed);
     this.ao.dispose();
     this.composer.dispose();
     this.renderer.dispose();

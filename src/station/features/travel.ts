@@ -10,7 +10,7 @@ import { EYE_HEIGHT } from '../modes/walker';
 const V = (x: number, y: number, z: number) => new THREE.Vector3(x, y, z);
 
 /** The corridor, hangar to observation room: every vertex is clear of walls and hatches. */
-const LINE = [V(-3.4, 0, 0), V(0.4, 0, 0), V(1.6, 0, 0), V(3.4, 0, 0), V(5.2, 0, 0.2), V(11.4, 0, 0), V(13.6, 0, 0)];
+const LINE = [V(-3.4, 0, 0), V(0.5, 0, 0), V(1.6, 0, 0), V(4.4, 0, 0), V(6.9, 0, 0.1), V(11.4, 0, 0), V(13.6, 0, 0)];
 export type Room = 'hangar' | 'research' | 'observation';
 const STOP: Record<Room, { i: number; look: THREE.Vector3 }> = {
   hangar: { i: 0, look: V(-8, -0.3, 0) },

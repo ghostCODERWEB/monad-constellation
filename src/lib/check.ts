@@ -51,7 +51,7 @@ const kindOf = (label: string): HolderRow['kind'] =>
 
 const CHECK_TTL = 30 * 60_000;
 
-export const checkToken = (address: string) => diskCached<TokenCheck>(`check2:${address}`, async () => {
+export const checkToken = (address: string) => diskCached<TokenCheck>(`check3:${address}`, async () => {
   const now = new Date();
   let credits = 0;
   const sources = new Set<string>();
@@ -144,7 +144,7 @@ export const checkToken = (address: string) => diskCached<TokenCheck>(`check2:${
     ...(ind?.reward_indicators ?? []).map((r) => ({ type: r.indicator_type, kind: 'reward' as const, level: r.score, percentile: r.signal_percentile })),
   ];
   const nansenRisk = nansenIndicatorRisk(indicators.filter((i) => i.kind === 'risk').map((i) => ({ type: i.type, score: i.level })), isStable);
-  const score = tokenScore({ concentration: conc?.score ?? null, insider: ins?.score ?? null, windShear: wind, exitLiquidity: exit?.score ?? null, sellPressure: sell?.score ?? null, nansenRisk }, { marketCapUsd: marketCap, isStablecoin: isStable, symbol });
+  const score = tokenScore({ concentration: conc?.score ?? null, insider: ins?.score ?? null, windShear: wind, exitLiquidity: exit?.score ?? null, sellPressure: sell?.score ?? null, nansenRisk }, { marketCapUsd: marketCap, isStablecoin: isStable, address });
 
   // The checklist: each check is one measured number against stated thresholds.
   const checks: Check[] = [];

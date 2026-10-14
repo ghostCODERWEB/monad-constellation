@@ -3,6 +3,7 @@
 import type { Engine } from './engine';
 import { installTelescope } from './modes/telescope';
 import { installHangar } from './features/hangar';
+import { installDoors } from './features/doors';
 import { installRobot } from './features/robot';
 import { installPC } from './features/pc';
 import { installTravel } from './features/travel';
@@ -13,6 +14,7 @@ export function installFeatures(e: Engine) {
   const cleanups: (() => void)[] = [];
   const run = (f: (e: Engine) => (() => void) | void) => { const c = f(e); if (c) cleanups.push(c); };
   run(installTelescope);
+  run(installDoors);
   run(installHangar);
   run(installRobot);
   run(installPC);

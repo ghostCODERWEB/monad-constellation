@@ -79,7 +79,7 @@ Read these before changing anything:
 - **`agent`**: a proxy to Nansen's Research Agent.
   - Calls `POST https://api.nansen.ai/api/v1/agent/fast` (200 credits) or `/expert` (750) with the `apikey` header. The response is SSE: `delta`, `tool_call`, `finish` (with `conversation_id`), `error`, then `[DONE]`.
   - It frames each question to Monad and adds the subject.
-  - `AGENT_DAILY_CAP` defaults to 40, kept in memory.
+  - `AGENT_DAILY_CREDITS` (default 8000) is a per-process daily credit budget, priced per mode, with two questions in flight at most and cross-site calls refused (`src/lib/agentBudget.ts`).
   - The key needed the "account" permission, which it now has; the endpoint works.
 - The Nansen client is `src/lib/nansen.ts`. Contracts live in `contracts/` (MonadReputation and ReputationCollateral); they're NOT deployed, because that needs the user's own key.
 

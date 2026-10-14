@@ -66,7 +66,7 @@ export function worldStyle(p: Planet): WorldStyle {
   let biome: Biome, why: string;
   if (p.state !== 'stable') {
     biome = 'magma';
-    why = p.state === 'flagged' ? 'Nansen flags this token as a risk.' : `Down ${Math.round(-(p.change7d ?? 0))}% this week: the crust is breaking.`;
+    why = p.state === 'flagged' ? 'Nansen flags this token as a risk.' : p.change7d != null ? `Down ${Math.round(-p.change7d)}% this week: the crust is breaking.` : 'Price falling (7-day change unavailable): the crust is breaking.';
   } else if (STAKED.test(p.symbol)) {
     biome = 'glacier';
     why = 'A staked form of MON: value locked up, so the world is frozen.';
@@ -78,23 +78,27 @@ export function worldStyle(p: Planet): WorldStyle {
     why = `An established asset (${p.capGroup ? `Nansen ${p.capGroup}` : usd(p.marketCap ?? 0)}): a settled, temperate world.`;
   } else {
     biome = 'amethyst';
-    why = 'A young Monad-native token: an amethyst world.';
+    // No claim about age or origin here: that isn't checked.
+    why = 'A smaller token with no Nansen smart money holders seen: an amethyst world.';
   }
 
   // Oceans are liquidity: $1k of liquidity is a desert, $10M a water world.
-  const liq = Math.max(1, p.liquidity ?? 1);
-  const t = clamp((Math.log10(liq) - 3) / 4, 0, 1);
+  // Unknown liquidity gets a middling look but is labelled unknown, never "$1".
+  const liq = p.liquidity != null ? Math.max(1, p.liquidity) : null;
+  const t = liq != null ? clamp((Math.log10(liq) - 3) / 4, 0, 1) : 0.4;
   const sea = biome === 'magma' ? 0.32 + t * 0.12 : 0.36 + t * 0.26;
   const oceanPct = Math.round(clamp((sea - 0.3) / 0.35 * 80 + 8, 5, 92));
 
   // Weather is the day's net flow: money in clears the skies, money out brings storms.
-  const nf = p.netflow24h ?? 0;
+  const nf = p.netflow24h;
   let clouds: number, weather: string;
-  if (nf > 1000) { clouds = 0.22; weather = `Clear skies: ${usd(nf)} flowed in today.`; }
+  if (nf == null) { clouds = 0.36; weather = 'Weather unknown: Nansen has no net flow for today.'; }
+  else if (nf > 1000) { clouds = 0.22; weather = `Clear skies: ${usd(nf)} flowed in today.`; }
   else if (nf < -1000) { clouds = clamp(0.5 + Math.log10(-nf) / 25, 0.5, 0.75); weather = `Storm front: ${usd(nf)} flowed out today.`; }
   else { clouds = 0.36; weather = `Scattered clouds: flows were quiet (${nf >= 0 ? '+' : '−'}${usd(nf)}).`; }
 
-  // City lights are its people: holders and today's traders.
+  // City lights are an activity proxy: sampled holders plus today's traders.
+  // One wallet can be both, so this is not a count of unique people.
   const settlements = p.holders + p.traders24h;
   const city = clamp(settlements / 220, 0.08, 1);
 
@@ -103,7 +107,7 @@ export function worldStyle(p: Planet): WorldStyle {
   return {
     biome, biomeName: NAMES[biome], why,
     sea, oceanPct,
-    oceanWhy: `${usd(liq)} of liquidity`,
+    oceanWhy: liq != null ? `${usd(liq)} of liquidity` : 'liquidity unavailable from Nansen',
     clouds, weather,
     city, settlements,
     rough: clamp(0.45 + vol / 80, 0.45, 1),

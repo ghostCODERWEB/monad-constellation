@@ -95,7 +95,7 @@ export function PlanetView({ p, galaxy, token, clusters, onStar }: { p: Planet; 
         <li><b>{world.biomeName}</b><span>{world.why}</span></li>
         <li><b>Oceans ≈ {world.oceanPct}%</b><span>Liquidity is water: {world.oceanWhy}.</span></li>
         <li><b>Weather</b><span>{world.weather}</span></li>
-        <li><b>{world.settlements} settlements</b><span>Night-side lights: {p.holders} holders and {p.traders24h} of today&apos;s traders.</span></li>
+        <li><b>{world.settlements} settlements</b><span>Night-side lights, an activity proxy: {p.holders} holders sampled plus {p.traders24h} of today&apos;s traders (a wallet can be both).</span></li>
         {p.smartHolders > 0 && <li><b>Golden rings</b><span>{p.smartHolders} smart money holder{p.smartHolders > 1 ? 's' : ''}.</span></li>}
       </ul>
       {moons.length > 0 && (
@@ -339,7 +339,7 @@ function ClusterCard({ c, galaxy, onStar, self }: { c: Cluster; galaxy: Galaxy; 
   const sym = galaxy.planets[c.planet].symbol;
   return (
     <div className={`cluster ${c.severity}`}>
-      <span className="eyebrow">⚠ Insider cluster · {c.kind === 'funded' ? 'funded together' : 'transfer ring'}</span>
+      <span className="eyebrow">{c.kind === 'transfer' ? 'Linked holders · transfer-connected' : <>⚠ Insider cluster · {c.kind === 'funded' ? 'funded together' : 'transfer cycle'}</>}</span>
       <b>{(c.share * 100).toFixed(1)}% of ${sym} <small>· {money(c.holdingUsd)}</small></b>
       <p>{c.evidence}</p>
       {c.funder && (
@@ -391,7 +391,7 @@ export function ReputationCard({ r, chain, rank, total }: { r: Reputation; chain
           <b>{r.score}</b>
         </div>
         <div>
-          <span className="eyebrow">Monad reputation · nansen-rep-v1</span>
+          <span className="eyebrow">Monad reputation · nansen-rep-v2</span>
           <b className="tier" style={{ color: c }}>{r.tier}</b>
           <span className="sub">#{rank.toLocaleString()} of {total.toLocaleString()} wallets</span>
         </div>

@@ -1,5 +1,7 @@
 'use client';
 
+import { useState } from 'react';
+
 import type { Engine } from '../engine';
 import type { Telescope, TelescopeHud } from '../modes/telescope';
 
@@ -10,10 +12,66 @@ const KIND_LABEL: Record<string, string> = {
   'deep-field': 'Deep field', 'black-hole': 'Black hole', remnant: 'Supernova remnant',
 };
 
+// The catalog remembers which category you were browsing between openings.
+let lastTab = 'majors';
+
+/** The catalog by category: each Monad universe (its worlds to discover), then the deep sky. */
+function Catalog({ hud, slew }: { hud: TelescopeHud; slew: (id: string) => void }) {
+  const [tab, setTabRaw] = useState(lastTab);
+  const setTab = (t: string) => { lastTab = t; setTabRaw(t); };
+  const sky = hud.catalog.filter((c) => c.group === 'sky');
+  const skyFound = sky.filter((c) => c.found).length;
+  const uni = hud.universes.find((u) => u.id === tab);
+  const whole = hud.catalog.find((c) => c.id === `universe-${tab}`);
+  const worlds = hud.catalog.filter((c) => c.group === tab && c.kind === 'token').sort((a, b) => b.size - a.size);
+  const totalWorlds = hud.universes.reduce((n, u) => n + u.worlds, 0), totalFound = hud.universes.reduce((n, u) => n + u.found, 0);
+  return (
+    <section className="tel-cat" aria-label="Celestial catalog">
+      <header>
+        <b>Catalog</b>
+        <span>{totalFound}/{totalWorlds} Monad worlds observed · {skyFound}/{sky.length} deep sky · click to slew</span>
+      </header>
+      <nav className="tel-tabs" aria-label="Categories">
+        {hud.universes.map((u) => (
+          <button key={u.id} className={tab === u.id ? 'on' : ''} style={{ ['--u' as string]: u.color }} onClick={() => setTab(u.id)}>
+            <i />{u.name}<em>{u.state === 'ready' ? `${u.found}/${u.worlds}` : u.state === 'loading' ? '…' : '—'}</em>
+          </button>
+        ))}
+        <button className={tab === 'sky' ? 'on' : ''} style={{ ['--u' as string]: '#c4b5fd' }} onClick={() => setTab('sky')}>
+          <i />Deep sky<em>{skyFound}/{sky.length}</em>
+        </button>
+      </nav>
+      {tab === 'sky' ? (
+        <ul>
+          {sky.map((c) => (
+            <li key={c.id}><button onClick={() => slew(c.id)}><i className={c.found ? 'found' : ''} />{c.name}<em>{KIND_LABEL[c.kind] ?? c.kind}</em></button></li>
+          ))}
+        </ul>
+      ) : uni ? (
+        <>
+          <div className="tel-uni" style={{ ['--u' as string]: uni.color }}>
+            <b>{uni.name} universe</b>
+            <p>{uni.blurb}</p>
+            {uni.state === 'ready' && <div className="tel-prog" aria-label={`${uni.found} of ${uni.worlds} worlds observed`}><span style={{ width: `${uni.worlds ? (uni.found / uni.worlds) * 100 : 0}%` }} /></div>}
+            <small>{uni.state === 'loading' ? 'Charting this universe from Nansen…' : uni.state === 'unavailable' ? 'Not reachable right now: its galaxy data could not be loaded.' : `${uni.found} of ${uni.worlds} worlds observed · categories assigned by this app from each token’s Nansen name`}</small>
+          </div>
+          {uni.state === 'ready' && (
+            <ul>
+              {whole && <li><button className="whole" onClick={() => slew(whole.id)}><i className={whole.found ? 'found' : ''} />Whole {uni.name} galaxy<em>slew and frame the universe</em></button></li>}
+              {worlds.map((c) => (
+                <li key={c.id}><button onClick={() => slew(c.id)}><i className={c.found ? 'found' : ''} />{c.name}<em>{c.found ? 'observed' : 'not yet observed'}</em></button></li>
+              ))}
+            </ul>
+          )}
+        </>
+      ) : null}
+    </section>
+  );
+}
+
 export function TelescopeHUD({ engine, hud, catalogOpen }: { engine: Engine; hud: TelescopeHud; catalogOpen: boolean }) {
   const scope = (engine as unknown as { telescope?: Telescope }).telescope;
   const fov = hud.fov < 1 / 60 ? `${(hud.fov * 3600).toFixed(1)}″` : hud.fov < 1 ? `${(hud.fov * 60).toFixed(1)}′` : `${hud.fov.toFixed(1)}°`;
-  const found = hud.catalog.filter((c) => c.found).length;
   return (
     <div className="tel">
       <div className="tel-cross" aria-hidden><i /><i /></div>
@@ -42,24 +100,7 @@ export function TelescopeHUD({ engine, hud, catalogOpen }: { engine: Engine; hud
         </section>
       )}
 
-      {catalogOpen && scope && (
-        <section className="tel-cat" aria-label="Celestial catalog">
-          <header>
-            <b>Catalog</b>
-            <span>{found}/{hud.catalog.length} observed · click to slew</span>
-            <span>{hud.tokens === 'loading' ? 'Loading Monad token worlds from Nansen…' : hud.tokens === 'unavailable' ? 'Monad token worlds unavailable: galaxy data not reachable.' : 'Token worlds: the Monad Constellation, from Nansen data.'}</span>
-          </header>
-          <ul>
-            {hud.catalog.map((c) => (
-              <li key={c.id}>
-                <button onClick={() => scope.slewTo(c.id)}>
-                  <i className={c.found ? 'found' : ''} />{c.name}<em>{KIND_LABEL[c.kind] ?? c.kind}</em>
-                </button>
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
+      {catalogOpen && scope && <Catalog hud={hud} slew={(id) => scope.slewTo(id)} />}
 
       <ul className="tel-keys">
         <li>mouse or <kbd>W A S D</kbd> aim · wheel or <kbd>+</kbd><kbd>−</kbd> zoom</li>

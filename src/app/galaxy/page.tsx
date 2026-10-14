@@ -3,6 +3,7 @@
 import dynamic from 'next/dynamic';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Galaxy } from '@/lib/galaxy';
+import { flightDestination, phaseAfterJump } from '@/lib/flight';
 import type { TokenProfile, WalletProfile } from '@/lib/profile';
 import type { ClusterReport } from '@/lib/clusters';
 import type { Timeline, TradeEvent } from '@/lib/timeline';
@@ -10,19 +11,28 @@ import { money } from '@/components/Dossier';
 import { PlanetView, RegistryPanel, ReputationCard, StarView, type OnChain } from '@/components/Dossier';
 import type { ReputationSet } from '@/lib/repFlags';
 import { UNIVERSES, universeDef, type UniverseId } from '@/lib/universes';
-import { KIND, type FlightHud, type Focus, type GalaxyHandle, type ReplayState, type Tie } from '@/components/GalaxyScene';
+import { KIND, type FlightCarry, type FlightHud, type Focus, type GalaxyHandle, type ReplayState, type Tie } from '@/components/GalaxyScene';
 
 const GalaxyScene = dynamic(() => import('@/components/GalaxyScene'), { ssr: false });
 
 
 export default function Page() {
   const [galaxy, setGalaxy] = useState<Galaxy | null>(null);
+  // Every universe loaded so far: the active one plus its neighbours, all in one open space.
+  const [galaxies, setGalaxies] = useState<Partial<Record<UniverseId, Galaxy>>>({});
+  const galaxiesRef = useRef(galaxies);
+  galaxiesRef.current = galaxies;
+  // The ship's state when it flies from one galaxy into the next.
+  const [carry, setCarry] = useState<FlightCarry | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [hover, setHover] = useState<Focus>(null);
   const [selected, setSelected] = useState<Focus>(null);
   const [query, setQuery] = useState('');
   const [introDone, setIntroDone] = useState(false);
   const [flying, setFlying] = useState(false);
+  const [cockpitRide, setCockpitRide] = useState(false);
+  const [ridePhase, setRidePhase] = useState<'depart' | 'jump' | 'approach' | 'free'>('free');
+  const [requestedFly, setRequestedFly] = useState<string | null>(null);
   const [hud, setHud] = useState<FlightHud | null>(null);
   const [report, setReport] = useState<ClusterReport | null>(null);
   const [timeline, setTimeline] = useState<Timeline | null>(null);
@@ -46,6 +56,10 @@ export default function Page() {
     const q = new URLSearchParams(window.location.search);
     const asked = q.get('universe'), fly = q.get('fly')?.toLowerCase();
     setFlying(q.get('flight') === '1');
+    const cockpit = q.get('cockpit') === '1';
+    setCockpitRide(cockpit);
+    setRidePhase(cockpit && q.get('arrival') === '1' ? 'depart' : 'free');
+    setRequestedFly(fly ?? null);
     const valid = (x: string | null | undefined): x is UniverseId => !!x && UNIVERSES.some((u) => u.id === x);
     fetch('/api/universes').then((r) => r.ok ? r.json() : null).then((idx: { universes: { id: UniverseId; tokens: { address: string }[] }[] } | null) => {
       if (idx) setTokenCounts(Object.fromEntries(idx.universes.map((u) => [u.id, u.tokens.length])));
@@ -58,12 +72,18 @@ export default function Page() {
   useEffect(() => {
     if (!universe) return;
     let dead = false;
-    setGalaxy(null); setError(null); setSelected(null); setHover(null); setReport(null); setTimeline(null); setRepSet(null); setWallets({}); setTokens({});
-    fetch(`/api/galaxy?u=${universe}`).then(async (r) => {
+    setError(null); setSelected(null); setHover(null); setReport(null); setTimeline(null); setRepSet(null); setWallets({}); setTokens({});
+    // Already charted as a neighbour: take over at once, no loading screen.
+    const known = galaxiesRef.current[universe];
+    setGalaxy(known ?? null);
+    (known ? Promise.resolve(known) : fetch(`/api/galaxy?u=${universe}`).then(async (r) => {
       const j = await r.json();
-      if (dead) return;
       if (!r.ok) throw new Error(j.message ?? 'The galaxy could not be built.');
+      return j as Galaxy;
+    })).then((j) => {
+      if (dead) return;
       setGalaxy(j);
+      setGalaxies((all) => ({ ...all, [universe]: j }));
       if (new URLSearchParams(window.location.search).get('flight') === '1') setIntroDone(true);
       else setTimeout(() => !dead && setIntroDone(true), 3800);
       // Tracing first funders is slower than the galaxy, so it follows it.
@@ -73,12 +93,46 @@ export default function Page() {
     }).catch((e) => !dead && setError(e.message));
     return () => { dead = true; };
   }, [universe]);
-  const switchUniverse = useCallback((u: UniverseId) => {
+  // The neighbouring galaxies load after the active one, one at a time.
+  const neighborsStarted = useRef(false);
+  useEffect(() => {
+    if (!galaxy || neighborsStarted.current) return;
+    neighborsStarted.current = true;
+    (async () => {
+      for (const u of UNIVERSES) {
+        if (galaxiesRef.current[u.id]) continue;
+        try {
+          const r = await fetch(`/api/galaxy?u=${u.id}`);
+          if (!r.ok) continue;
+          const g = (await r.json()) as Galaxy;
+          setGalaxies((all) => (all[u.id] ? all : { ...all, [u.id]: g }));
+        } catch { /* that neighbour stays dark */ }
+      }
+    })();
+  }, [galaxy]);
+  const neighbors = useMemo(() => Object.values(galaxies).filter((g): g is Galaxy => !!g), [galaxies]);
+
+  const switchUniverse = useCallback((u: UniverseId, carried?: FlightCarry) => {
     if (u === universe) return;
+    setCarry(carried ?? null);
     setHud(null);
-    window.history.replaceState(null, '', `/galaxy?universe=${u}${flying ? '&flight=1' : ''}`);
+    setRidePhase('free');
+    setRequestedFly(null);
+    window.history.replaceState(null, '', `/galaxy?universe=${u}${flying ? '&flight=1' : ''}${cockpitRide ? '&cockpit=1' : ''}`);
     setUniverse(u);
-  }, [universe, flying]);
+  }, [universe, flying, cockpitRide]);
+
+  const arrivalIndex = useMemo(() => {
+    if (!galaxy || !cockpitRide || ridePhase === 'free' || !requestedFly) return null;
+    return flightDestination(galaxy.planets, requestedFly);
+  }, [galaxy, cockpitRide, ridePhase, requestedFly]);
+
+  useEffect(() => {
+    if (!galaxy || !cockpitRide || ridePhase !== 'jump') return;
+    const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const id = setTimeout(() => setRidePhase(phaseAfterJump(arrivalIndex)), reduced ? 160 : 900);
+    return () => clearTimeout(id);
+  }, [galaxy, cockpitRide, ridePhase, arrivalIndex]);
 
   // Selecting flies to it; closing a dossier leaves the camera where it is.
   const select = useCallback((f: Focus) => {
@@ -113,7 +167,16 @@ export default function Page() {
   // While flying, remember the last world you were over, so docking can log the trip.
   const lastFlown = useRef<{ address: string; symbol: string } | null>(null);
   if (hud?.world && galaxy) { const p = galaxy.planets[hud.world.planet]; lastFlown.current = { address: p.address, symbol: p.symbol }; }
-  const homeHref = flying && lastFlown.current ? `/?from=${lastFlown.current.address}&sym=${encodeURIComponent(lastFlown.current.symbol)}` : lastWorld ? `/?from=${lastWorld.address}&sym=${encodeURIComponent(lastWorld.symbol)}` : '/';
+  const homeBase = flying && lastFlown.current ? `/?from=${lastFlown.current.address}&sym=${encodeURIComponent(lastFlown.current.symbol)}` : lastWorld ? `/?from=${lastWorld.address}&sym=${encodeURIComponent(lastWorld.symbol)}` : '/';
+  const homeHref = cockpitRide ? `${homeBase}${homeBase.includes('?') ? '&' : '?'}return=1&cockpit=1` : homeBase;
+  const finishArrival = useCallback(() => {
+    setRidePhase('free');
+    if (!galaxy || arrivalIndex == null) return;
+    const p = galaxy.planets[arrivalIndex];
+    lastFlown.current = { address: p.address, symbol: p.symbol };
+    // On a cockpit ride the dossier stays closed so the view is clear; select the world to open it.
+    if (!cockpitRide) setSelected({ type: 'planet', index: arrivalIndex });
+  }, [galaxy, arrivalIndex, cockpitRide]);
 
   // The heartbeat: poll the chain head; the scene interpolates between polls.
   useEffect(() => {
@@ -146,15 +209,18 @@ export default function Page() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.target as HTMLElement)?.tagName === 'INPUT') return;
-      if (e.key === 'Escape') { if (selected) select(null); else if (flying) toggleFlight(false); }
+      if (e.key === 'Escape') {
+        if (cockpitRide && ridePhase !== 'free') { scene.current?.skipArrival(); finishArrival(); }
+        else if (selected) select(null); else if (flying) toggleFlight(false);
+      }
       else if (e.code === 'KeyR' && flying) scene.current?.scan();
-      else if (e.code === 'KeyB' && flying && hud?.station.dockable) window.location.assign(homeHref);
+      else if (e.code === 'KeyB' && flying && (cockpitRide || hud?.station.dockable)) window.location.assign(homeHref);
       else if (e.code === 'KeyH' && !flying && galaxy) home();
       else if (e.code === 'KeyP' && timeline) play(!rep.playing);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [select, home, toggleFlight, flying, selected, galaxy, introDone, timeline, play, rep.playing, hud?.station.dockable, homeHref]);
+  }, [select, home, toggleFlight, flying, selected, galaxy, introDone, timeline, play, rep.playing, hud?.station.dockable, homeHref, cockpitRide, ridePhase, finishArrival]);
 
   const results = useMemo(() => {
     if (!galaxy || query.trim().length < 2) return [];
@@ -220,8 +286,17 @@ export default function Page() {
 
   return (
     <main>
-      {galaxy && <GalaxyScene key={galaxy.universe} ref={scene} galaxy={galaxy} focus={selected ?? hover} flying={flying} onHover={setHover} onSelect={select} onFlight={setHud} onUniverseJump={switchUniverse} ties={ties}
+      {galaxy && <GalaxyScene key={galaxy.universe} ref={scene} galaxy={galaxy} focus={selected ?? hover} flying={flying} cockpitView={cockpitRide} arrivalPlanet={ridePhase !== 'free' ? arrivalIndex : null} onArrivalComplete={finishArrival} departing={ridePhase === 'depart'} onDepartureComplete={() => setRidePhase('jump')} onHover={setHover} onSelect={select} onFlight={setHud} onUniverseJump={switchUniverse} neighbors={neighbors} carry={carry} ties={ties}
         timeline={timeline} onReplay={setRep} onTrade={onTrade} />}
+
+      {cockpitRide && (ridePhase === 'jump' || ridePhase === 'approach') && (
+        <div className={`flight-transition ${ridePhase}`} role="status">
+          <div className="warp-lines" />
+          <span>{ridePhase === 'jump' ? 'MONAD TRANSFER CORRIDOR' : 'RCS BRAKING BURN'}</span>
+          <b>{ridePhase === 'jump' ? 'Jumping to the Constellation' : arrivalIndex != null && galaxy ? `Approaching $${galaxy.planets[arrivalIndex].symbol}` : 'Arriving in the Constellation'}</b>
+          <em>Esc skips cinematic</em>
+        </div>
+      )}
 
       <a className="to-station" href={homeHref} title="Dock back at the orbital station">← Station</a>
       {notFound && (
@@ -269,7 +344,7 @@ export default function Page() {
             </aside>
           )}
           {shown && !registryOpen && (
-            <aside className="dossier" key={`${shown.type}${shown.index}`}>
+            <aside className={`dossier ${cockpitRide && flying ? 'cockpit-dossier' : ''}`} key={`${shown.type}${shown.index}`}>
               {shown.type === 'planet'
                 ? <PlanetView p={galaxy.planets[shown.index]} galaxy={galaxy} token={tokens[galaxy.planets[shown.index].address]} clusters={report?.clusters ?? []} onStar={(i) => select({ type: 'star', index: i })} />
                 : <StarView s={galaxy.stars[shown.index]} galaxy={galaxy} wallet={wallets[galaxy.stars[shown.index].address]}
@@ -343,7 +418,8 @@ export default function Page() {
                 <li><kbd>Space</kbd> brake</li>
                 <li>drag to steer</li>
                 <li>fly low over a world for an expedition</li>
-                <li>fly through a jump ring to enter another universe</li>
+                <li>fly into a neighbouring galaxy to explore it: all five share one space round the station</li>
+                {cockpitRide && <li><kbd>B</kbd> return to the station</li>}
                 <li><kbd>Esc</kbd> back to orbit view</li>
               </ul>
             </div>

@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "next dev -p 3300",
     "build": "next build",
-    "start": "next start -p 3300",
+    "start": "next start -H 0.0.0.0 -p ${PORT:-3300}",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "contract:build": "node contracts/build.mjs",

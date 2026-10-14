@@ -14,7 +14,7 @@ const KIND_ICON: Record<string, string> = { discovery: '✦', egg: '☺', resear
 export function StationHUD({ engine, state }: { engine: Engine; state: EngineState | null }) {
   const [log, setLog] = useState<LogEntry[]>(() => engine.log.entries);
   const [logOpen, setLogOpen] = useState(false);
-  const [help, setHelp] = useState(true);
+  const [help, setHelp] = useState(false);
   useEffect(() => engine.log.subscribe(setLog), [engine]);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {

@@ -20,7 +20,7 @@ const wallet = new Wallet(process.env.DEPLOYER_KEY, provider);
 console.log(`Deploying from ${wallet.address} to chain ${net.chainId}…`);
 
 const R = load('MonadReputation');
-const registry = await new ContractFactory(R.abi, R.bytecode, wallet).deploy('nansen-rep-v1');
+const registry = await new ContractFactory(R.abi, R.bytecode, wallet).deploy('nansen-rep-v2');
 await registry.waitForDeployment();
 const reg = await registry.getAddress();
 console.log('MonadReputation:      ', reg, `${net.explorer}/address/${reg}`);
