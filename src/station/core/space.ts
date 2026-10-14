@@ -46,6 +46,8 @@ export function clampInto(v: Volume, p: THREE.Vector3, pad: number, out: THREE.V
 
 export class Space {
   volumes: Volume[] = [];
+  /** Solid props (desk, telescope, consoles, robot). The volumes say where the air is; these carve furniture out of it. */
+  props: { name: string; box: THREE.Box3 }[] = [];
   private tmp = new THREE.Vector3();
   private best = new THREE.Vector3();
 
@@ -81,6 +83,30 @@ export class Space {
     const into = vel.dot(n);
     if (into < 0) vel.addScaledVector(n, -into * (1 + bounce));
     return n;
+  }
+
+  addProp(name: string, box: THREE.Box3) { this.props.push({ name, box }); }
+
+  /**
+   * Pushes a body out of any prop it overlaps, by the shortest way out, and
+   * removes the velocity that drove it in. The body spans `below`..`above`
+   * around `pos` vertically (feet to head when walking), `radius` sideways.
+   */
+  resolveProps(pos: THREE.Vector3, vel: THREE.Vector3, radius: number, below: number, above: number): boolean {
+    let hit = false;
+    for (const { box } of this.props) {
+      if (pos.y + above < box.min.y || pos.y - below > box.max.y) continue;
+      const dx0 = pos.x - (box.min.x - radius), dx1 = box.max.x + radius - pos.x;
+      const dz0 = pos.z - (box.min.z - radius), dz1 = box.max.z + radius - pos.z;
+      if (dx0 <= 0 || dx1 <= 0 || dz0 <= 0 || dz1 <= 0) continue;
+      const m = Math.min(dx0, dx1, dz0, dz1);
+      if (m === dx0) { pos.x -= dx0; if (vel.x > 0) vel.x = 0; }
+      else if (m === dx1) { pos.x += dx1; if (vel.x < 0) vel.x = 0; }
+      else if (m === dz0) { pos.z -= dz0; if (vel.z > 0) vel.z = 0; }
+      else { pos.z += dz1; if (vel.z < 0) vel.z = 0; }
+      hit = true;
+    }
+    return hit;
   }
 
   /** Directions in which a wall is within `reach` of p: used for push-off. */

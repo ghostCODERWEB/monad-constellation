@@ -58,6 +58,13 @@ export function installHangar(e: Engine) {
     foot.position.set(dock.x + x, -3.68, dock.z + z);
     bay.add(foot);
   }
+  // Clamp status lamps on the cradle feet: red while the ship is free, amber while it is being captured or released, green when it is held and connected.
+  const lampMat = new THREE.MeshStandardMaterial({ color: 0x111111, emissive: 0x35ff9b, emissiveIntensity: 1.2, roughness: 0.4 });
+  const setLamps = (c: number, i = 1.2) => { lampMat.emissive.setHex(c); lampMat.emissiveIntensity = i; };
+  for (const x of [-2, 2]) for (const z of [-1, 1]) {
+    const lamp = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.05, 16), lampMat);
+    lamp.position.set(dock.x + x * 1.12, -3.7, dock.z + z * 1.38); bay.add(lamp);
+  }
   // Fuel and power umbilicals: rubber hoses from a wall port to the hull, wheel chocks on the deck.
   const hoses: THREE.Group[] = [];
   const hose = (from: THREE.Vector3, to: THREE.Vector3, color: number) => {
@@ -148,24 +155,52 @@ export function installHangar(e: Engine) {
     window.history.replaceState(null, '', '/');
   }
   const parked = ship.group.position.clone();
-  const ARRIVE = 5;
+  // Docking, in seconds from the call-in. Each stage has a visible cause, and the reverse of the launch:
+  //   0.0  approach     in along the bay axis through the open doors, thrust easing down; the clamp lamps are red
+  //   6.0  align + land RCS pulses swing it broadside over the cradle and it settles onto the pads; the lamps go amber
+  //   9.0  clamp        the umbilicals run out and connect; the lamps go green
+  //   10.5 doors        the bay doors close
+  //   13.0 pressurised  the beacon goes steady, and the crew is told the bay is safe
+  const FLY = 9, DOORS_AT = 10.5, DOORS_FOR = 3.5, END = 14;
+  const arriveStages: [number, string][] = [[0, 'Approaching the bay'], [6, 'Aligning over the cradle'], [9, 'Clamps engaged, umbilicals connected'], [DOORS_AT, 'Bay doors closing'], [13, 'Bay pressurised']];
+  let arrStage = -1;
+  if (arriving >= 0) { setLamps(0xff3030, 1.6); for (const h of hoses) { h.scale.setScalar(0.001); h.visible = false; } }
 
   e.tickers.push((dt, t) => {
     for (const b of ship.blinkers) b.mesh.visible = Math.sin(t * 4 + b.phase) > 0.6;
     if (arriving >= 0 && !ignited) {
       arriving += dt;
-      const k = Math.min(1, arriving / ARRIVE);
+      const T = arriving, k = Math.min(1, T / FLY);
+      const stage = arriveStages.reduce((n, [t0], i) => (T >= t0 ? i : n), 0);
+      if (stage !== arrStage) {
+        arrStage = stage;
+        e.say(arriveStages[stage][1] + (stage === 4 ? '. Welcome aboard.' : '…'), 3);
+        if (stage === 1) setLamps(0xffb020, 1.6);
+        if (stage === 2) { setLamps(0x35ff9b, 1.4); e.sfx?.('grab'); }
+      }
       // In along the hangar axis, decelerating; the last third swings and lowers.
       const approach = Math.min(1, k / 0.65), settle = Math.max(0, (k - 0.65) / 0.35);
       const a2 = 1 - Math.pow(1 - approach, 3), s2 = settle * settle * (3 - 2 * settle);
       ship.group.position.set(parked.x, parked.y + 1.2 * (1 - s2), THREE.MathUtils.lerp(-30, parked.z, a2));
       ship.group.rotation.y = THREE.MathUtils.lerp(Math.PI, parkedYaw, s2);
-      const thr = 1 - a2 * 0.85;
+      const thr = k < 1 ? 1 - a2 * 0.85 : 0;
       for (const p of ship.plumes) p.scale.z = 0.001 + thr * (0.9 + Math.random() * 0.2);
-      if (k >= 1) {
+      // Attitude thrusters while it swings broadside.
+      if (T > 5.2 && T < 8.4) pulseRcs(dt, T < 6.8 ? [...noseSide(1), ...tailSide(-1)] : [...noseSide(-1), ...tailSide(1)]);
+      if (T > 7.2 && T < 9) pulseRcs(dt, lower);
+      stepPuffs(dt);
+      // Umbilicals run out from the ground-support panel and connect.
+      const reach = ease((T - 9) / 1.4);
+      for (const h of hoses) { h.visible = reach > 0; h.scale.setScalar(Math.max(0.001, reach)); }
+      // Then the doors close, on a smooth curve rather than a chase.
+      const shut = ease((T - DOORS_AT) / DOORS_FOR);
+      hangarLeft.position.x = -doorX - (1 - shut) * 5.5; hangarRight.position.x = doorX + (1 - shut) * 5.5;
+      if (beacon) (beacon.material as THREE.MeshStandardMaterial).emissiveIntensity = T < 13 ? 0.4 + 0.9 * Math.abs(Math.sin(T * 5)) : 0.9;
+      if (T >= END) {
         arriving = -1;
         for (const p of ship.plumes) p.scale.z = 0.001;
-        e.say('Shuttle docked. Hangar doors closing.');
+        hangarLeft.position.x = -doorX; hangarRight.position.x = doorX;
+        for (const h of hoses) { h.visible = true; h.scale.setScalar(1); }
       }
       return;
     }
@@ -196,6 +231,7 @@ export function installHangar(e: Engine) {
       const T = launchT;
       // 0–: checks. The beacon pulses; the umbilicals reel in.
       if (beacon) (beacon.material as THREE.MeshStandardMaterial).emissiveIntensity = 0.4 + 0.9 * Math.abs(Math.sin(T * 5));
+      if (T > 0.4) setLamps(0xffb020, 1.6 * (0.6 + 0.4 * Math.sin(T * 8)));
       const reel = ease((T - 0.4) / 1.1);
       for (const h of hoses) { h.scale.setScalar(Math.max(0.001, 1 - reel)); h.visible = reel < 1; }
       // 1.5–5.5: the doors part.

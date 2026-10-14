@@ -119,7 +119,11 @@ function stepWalking(w: Walker, input: Input, dt: number, space: Space | null, g
   // Feet follow the floor.
   const targetY = groundAt(w.pos.x, w.pos.z) + EYE_HEIGHT;
   w.pos.y += (targetY - w.pos.y) * (1 - Math.exp(-12 * dt));
-  if (space) space.resolve(w.pos, w.vel, w.radius, 0);
+  if (space) {
+    space.resolve(w.pos, w.vel, w.radius, 0);
+    // Furniture is solid: slide around it, then make sure that didn't push a wall through you.
+    if (space.resolveProps(w.pos, w.vel, w.radius, EYE_HEIGHT, 0.2)) { space.resolve(w.pos, w.vel, w.radius, 0); w.contact = 1; }
+  }
   w.stride += Math.hypot(w.vel.x, w.vel.z) * dt;
   w.reach.left *= Math.exp(-4 * dt); w.reach.right *= Math.exp(-4 * dt);
 }
@@ -255,6 +259,7 @@ export function stepWalker(w: Walker, input: Input, dt: number, space: Space | n
   if (!w.grip) w.pos.addScaledVector(w.vel, dt);
   if (space) {
     const before = w.vel.length();
+    if (space.resolveProps(w.pos, w.vel, w.radius, 0.5, 0.5)) w.contact = 1;
     const n = space.resolve(w.pos, w.vel, w.radius, 0.12);
     if (n) {
       const hit = before - w.vel.length();

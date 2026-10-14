@@ -6,6 +6,7 @@ import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
+import { GTAOPass } from 'three/examples/jsm/postprocessing/GTAOPass.js';
 import { interiorEnvironment } from './world/envInterior';
 import { Input } from './core/input';
 import { Interactions, type Interactable } from './core/interact';
@@ -55,6 +56,13 @@ export class Engine {
   renderer: THREE.WebGLRenderer;
   composer: EffectComposer;
   bloom: UnrealBloomPass;
+  /** Ambient occlusion: contact shadows in corners, under racks and around props. */
+  ao: GTAOPass;
+  /** 3 = full (shadows + AO + 2× pixels), 2 = no AO, 1 = no shadows, 0 = native pixels. It steps down by itself when frames run long. */
+  quality = 3;
+  private slow = 0;
+  private smoothDt = 1 / 60;
+  private pinned = false;
   scene = new THREE.Scene();
   camera: THREE.PerspectiveCamera;
   input: Input;
@@ -74,6 +82,7 @@ export class Engine {
   private listeners = new Set<(s: EngineState) => void>();
   private lastEmit = 0;
   private raf = 0;
+  private bob = 0;
   private clock = new THREE.Clock();
   private toast: { text: string; until: number } | null = null;
   private el: HTMLElement;
@@ -88,6 +97,11 @@ export class Engine {
     this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.setSize(el.clientWidth, el.clientHeight);
+    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    // ?q=0..3 pins the quality (for screenshots and low-end checks); otherwise it adapts.
+    const pin = new URLSearchParams(window.location.search).get('q');
+    if (pin !== null && /^[0-3]$/.test(pin)) { this.quality = Number(pin); this.pinned = true; }
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 0.92;
     this.renderer.autoClear = false;
@@ -109,6 +123,14 @@ export class Engine {
     this.camera.add(this.hands.group);
 
     this.sun = new THREE.DirectionalLight(0xfff4e0, 2.2);
+    // Sunlight through the windows casts real shadows: a 28 m box that follows the player, so texels stay fine.
+    this.sun.castShadow = true;
+    this.sun.shadow.mapSize.set(2048, 2048);
+    const sc = this.sun.shadow.camera;
+    sc.left = -14; sc.right = 14; sc.top = 14; sc.bottom = -14; sc.near = 1; sc.far = 70;
+    this.sun.shadow.bias = -0.0004;
+    this.sun.shadow.normalBias = 0.03;
+    this.sun.shadow.radius = 3;
     this.scene.add(this.sun, this.sun.target);
     this.earthlight = new THREE.HemisphereLight(0x1a1630, 0x5d8ad6, 0.45);
     this.scene.add(this.earthlight);
@@ -121,6 +143,12 @@ export class Engine {
     worldPass.clearDepth = true;
     this.composer.addPass(skyPass);
     this.composer.addPass(worldPass);
+    this.ao = new GTAOPass(this.scene, this.camera, el.clientWidth, el.clientHeight);
+    this.ao.output = GTAOPass.OUTPUT.Default;
+    this.ao.blendIntensity = 0.9;
+    this.ao.updateGtaoMaterial({ radius: 0.6, distanceExponent: 1.4, thickness: 1.2, scale: 1, samples: 12 });
+    this.ao.updatePdMaterial({ lumaPhi: 10, depthPhi: 2, normalPhi: 3, radius: 5, rings: 2, samples: 12 });
+    this.composer.addPass(this.ao);
     this.bloom = new UnrealBloomPass(new THREE.Vector2(el.clientWidth, el.clientHeight), 0.32, 0.35, 0.95);
     this.composer.addPass(this.bloom);
     this.composer.addPass(new OutputPass());
@@ -191,6 +219,13 @@ export class Engine {
     this.hands.group.visible = w.view === 'first';
     animateHands(this.hands, w, t);
     const look = new THREE.Vector3(0, 0, -1).applyQuaternion(w.quat);
+    // Head-bob: a small vertical sway in step with the stride, only while walking in first person.
+    if (w.moveMode === 'walk' && w.view === 'first') {
+      const sp = Math.hypot(w.vel.x, w.vel.z);
+      this.bob += (Math.min(1, sp / 2.4) - this.bob) * (1 - Math.exp(-8 * dt));
+      this.camera.position.y += Math.sin(w.stride * 5.2) * 0.022 * this.bob;
+      this.camera.position.addScaledVector(new THREE.Vector3(1, 0, 0).applyQuaternion(w.quat), Math.cos(w.stride * 2.6) * 0.012 * this.bob);
+    }
     this.focus = this.interactions.focus(w.pos, look);
     if (this.focus && (this.input.hit('KeyE') || this.input.padHit(3))) this.focus.use();
     // Bodies noticed up close (Easter eggs log themselves).
@@ -240,9 +275,26 @@ export class Engine {
     // Sunlight through the windows follows the orbit and dies in Earth's shadow.
     this.sun.position.copy(this.camera.position).addScaledVector(this.sky.sunDir, 30);
     this.sun.target.position.copy(this.camera.position);
-    this.sun.intensity = 1.6 * this.sky.sunlit;
+    // Without shadow maps the sun would shine straight through the hull; aboard, keep only a trace of it.
+    const aboard = this.station.space.contains(this.camera.position, 0);
+    this.sun.intensity = 1.6 * this.sky.sunlit * (aboard && this.quality < 2 ? 0.25 : 1);
     this.earthlight.intensity = 0.25 + 0.45 * this.sky.earthDay;
+    this.adapt(dt);
+    this.ao.enabled = this.quality >= 3;
+    this.sun.castShadow = this.quality >= 2 && this.sky.sunlit > 0.02;
     this.composer.render(dt);
+  }
+
+  /** Steps quality down when frames stay long (above ~28 ms for three seconds), so a weak GPU gets smooth rather than pretty. */
+  private adapt(dt: number) {
+    if (this.pinned || this.t < 4) return; // shader compiles and texture uploads make the first seconds unrepresentative
+    this.smoothDt += (Math.min(dt, 0.2) - this.smoothDt) * 0.05;
+    this.slow = this.smoothDt > 0.028 ? this.slow + dt : Math.max(0, this.slow - dt);
+    if (this.slow > 3 && this.quality > 0) {
+      this.quality--; this.slow = 0;
+      if (this.quality === 0) { this.renderer.setPixelRatio(1); this.onResize(); }
+      this.log.add('quality', 'system', 'Graphics reduced', `Frames were running long, so quality dropped to level ${this.quality}.`);
+    }
   }
 
   private emit(force = false) {
@@ -275,6 +327,7 @@ export class Engine {
     const w = this.el.clientWidth, h = this.el.clientHeight;
     this.renderer.setSize(w, h);
     this.composer.setSize(w, h);
+    this.ao.setSize(w, h);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
   };
@@ -286,6 +339,21 @@ export class Engine {
     window.removeEventListener('resize', this.onResize);
     this.renderer.domElement.removeEventListener('click', this.onClick);
     this.input.dispose();
+    // Free every GPU resource the scenes hold (React remounts and hot reloads would otherwise leak them).
+    const freed = new Set<unknown>();
+    const free = (o: THREE.Object3D) => {
+      const m = o as THREE.Mesh;
+      if (m.geometry && !freed.has(m.geometry)) { freed.add(m.geometry); m.geometry.dispose(); }
+      for (const mat of (Array.isArray(m.material) ? m.material : m.material ? [m.material] : []) as THREE.Material[]) {
+        if (freed.has(mat)) continue;
+        freed.add(mat);
+        for (const v of Object.values(mat)) if (v && (v as THREE.Texture).isTexture && !freed.has(v)) { freed.add(v); (v as THREE.Texture).dispose(); }
+        mat.dispose();
+      }
+    };
+    this.scene.traverse(free); this.sky.scene.traverse(free);
+    (this.scene.environment as THREE.Texture | null)?.dispose();
+    this.ao.dispose();
     this.composer.dispose();
     this.renderer.dispose();
     this.el.removeChild(this.renderer.domElement);

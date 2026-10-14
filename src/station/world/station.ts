@@ -10,6 +10,7 @@ import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeom
 import { labelTexture, panelBump, panelTexture, patchTexture, rackTexture, type RackKind } from './textures';
 import { RACK_MODULES, blanketMaterial, glassSmudge, lightDiffuser, pbrSet, plateTexture, rackModule, recolouredPaint, scaleUV, tileUV } from './pbr';
 import { buildWorkstation } from './workstation';
+import { mergeStatic } from './mergeStatic';
 
 export interface Rail { a: THREE.Vector3; b: THREE.Vector3 }
 
@@ -731,6 +732,10 @@ export function buildStation(): Station {
     hangarConsole: V(0, 0.6, 1.4),
     shuttleDock: V(-5.9, -0.6, 0),
   };
+
+  // Static walls, racks, frames and fittings become one mesh per material; the doors, beacon and workstation stay live.
+  const merge = mergeStatic(interior, [hangarLeft, hangarRight]);
+  interior.userData.merge = merge;
 
   return {
     interior, exterior, space, rails, anchors, wallSpots, glass, groundAt,
