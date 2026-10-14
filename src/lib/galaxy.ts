@@ -6,6 +6,7 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { cached, nansen, pool } from './nansen';
+import { categoryOf, type UniverseId } from './universes';
 
 export type StarKind = 'smart' | 'fund' | 'whale' | 'exchange' | 'trader' | 'named' | 'contract' | 'anon';
 
@@ -14,6 +15,8 @@ export interface Cohort { key: string; netFlowUsd: number; wallets: number | nul
 export interface Planet {
   address: string;
   symbol: string;
+  /** Nansen's token name, e.g. "Apple aStock". */
+  name: string;
   marketCap: number | null;
   liquidity: number | null;
   volume24h: number | null;
@@ -64,6 +67,8 @@ export interface Star {
 export interface Trail { from: number; to: number; usd: number; p: number; at: string; tx: string }
 
 export interface Galaxy {
+  /** Which category universe this galaxy is. */
+  universe: UniverseId;
   builtAt: string;
   planets: Planet[];
   stars: Star[];
@@ -75,7 +80,6 @@ export interface Galaxy {
 
 const STABLE = /usd|^eur|^gho$|^dai$|^frax/i;
 const EXCHANGES = /binance|coinbase|okx|bybit|kraken|bitget|gate\.io|mexc|kucoin|htx|huobi|crypto\.com|upbit|bithumb/i;
-const PLANETS = 28;
 
 export function kindOf(labels: string[], usd: number, smart: boolean): StarKind {
   const all = labels.join(' | ');
@@ -105,7 +109,43 @@ interface SmartTrade { trader_address: string }
 
 const COHORT_KEYS = ['smart_trader', 'whale', 'top_pnl', 'public_figure', 'exchange', 'fresh_wallets'];
 
-async function build(): Promise<Galaxy> {
+export interface TokenMeta { address: string; symbol: string; name: string; marketCap: number | null; liquidity: number | null; category: UniverseId }
+
+const INDEX_TTL = 24 * 60 * 60_000;
+const CACHE_DIR = process.env.GALAXY_CACHE_DIR ?? (process.env.VERCEL ? '/tmp' : '.cache');
+
+/**
+ * Every Monad token Nansen tracks (its 30-day screener, stablecoins and the native token included), with its real
+ * name from tgm/token-information, and the universe each belongs to. About seventy tokens; names cost one credit each,
+ * so the index is kept a day and written to disk.
+ */
+export const getTokenIndex = () => cached('token-index', INDEX_TTL, async (): Promise<TokenMeta[]> => {
+  const file = path.join(CACHE_DIR, 'tokens-index.json');
+  try {
+    const hit = JSON.parse(await readFile(file, 'utf8')) as { at: number; tokens: TokenMeta[] };
+    if (Date.now() - hit.at < INDEX_TTL && hit.tokens.length) return hit.tokens;
+  } catch { /* build it */ }
+  const scr = await nansen<{ data: ScreenerRow[] }>('token-screener', {
+    chains: ['monad'], timeframe: '30d', pagination: { page: 1, per_page: 100 },
+    filters: { include_stablecoins: true, include_native_tokens: true }, order_by: [{ field: 'market_cap_usd', direction: 'DESC' }],
+  });
+  const rows = scr.body?.data ?? [];
+  const names = await pool(rows, 6, async (r) => {
+    const t = await nansen<{ data: { name?: string } }>('tgm/token-information', { chain: 'monad', token_address: r.token_address, timeframe: '1d' });
+    return t.body?.data?.name ?? null;
+  });
+  const tokens: TokenMeta[] = rows.map((r, i) => {
+    const symbol = r.token_symbol.replace(/^\s*⚠️?\s*/, '');
+    const name = names[i] ?? symbol;
+    return { address: r.token_address.toLowerCase(), symbol, name, marketCap: r.market_cap_usd ?? null, liquidity: r.liquidity ?? null, category: categoryOf(symbol, name) };
+  });
+  if (tokens.length) { try { await mkdir(CACHE_DIR, { recursive: true }); await writeFile(file, JSON.stringify({ at: Date.now(), tokens })); } catch { /* read-only fs */ } }
+  return tokens;
+});
+
+const UNIVERSE_CAP = 40;
+
+async function build(universe: UniverseId): Promise<Galaxy> {
   const errors: string[] = [];
   const endpoints: Record<string, number> = {};
   let credits = 0;
@@ -121,10 +161,12 @@ async function build(): Promise<Galaxy> {
   const ago = (days: number) => new Date(now.getTime() - days * 86_400_000).toISOString();
   const screen = (timeframe: string, field: string, direction: 'ASC' | 'DESC') => ({
     chains: ['monad'], timeframe, pagination: { page: 1, per_page: 100 },
-    filters: { include_stablecoins: false, include_native_tokens: false },
+    filters: { include_stablecoins: true, include_native_tokens: true },
     order_by: [{ field, direction }],
   });
 
+  const tokenIndex = await getTokenIndex();
+  const members = tokenIndex.filter((t) => t.category === universe).sort((a, b) => (b.marketCap ?? 0) - (a.marketCap ?? 0)).slice(0, UNIVERSE_CAP);
   const [day, week, holdings, smartTrades] = await Promise.all([
     call<{ data: ScreenerRow[] }>('token-screener', screen('24h', 'volume', 'DESC')),
     call<{ data: ScreenerRow[] }>('token-screener', screen('7d', 'price_change', 'ASC')),
@@ -132,17 +174,15 @@ async function build(): Promise<Galaxy> {
     call<{ data: SmartTrade[] }>('smart-money/dex-trades', { chains: ['monad'], pagination: { page: 1, per_page: 100 } }),
   ]);
   const weekly = new Map((week?.data ?? []).map((r) => [r.token_address.toLowerCase(), r.price_change ?? null]));
+  const dayRows = new Map((day?.data ?? []).map((r) => [r.token_address.toLowerCase(), r]));
   const sm = new Map((holdings?.data ?? []).map((h) => [h.token_address.toLowerCase(), h]));
   const smartSet = new Set((smartTrades?.data ?? []).map((t) => t.trader_address.toLowerCase()));
 
-  // The planets: the day's most traded tokens, and every token the smart money cohort holds.
-  const rows = (day?.data ?? []).filter((r) => !STABLE.test(r.token_symbol));
-  const chosen: ScreenerRow[] = [];
-  for (const h of holdings?.data ?? []) {
-    const r = rows.find((x) => x.token_address.toLowerCase() === h.token_address.toLowerCase());
-    if (r && !chosen.includes(r)) chosen.push(r);
-  }
-  for (const r of rows) if (chosen.length < PLANETS && !chosen.includes(r)) chosen.push(r);
+  // The planets: every token in this universe, with this day's activity where it had any.
+  const chosen: (ScreenerRow & { name: string })[] = members.map((t) => {
+    const d = dayRows.get(t.address);
+    return { token_address: t.address, token_symbol: t.symbol, name: t.name, market_cap_usd: t.marketCap, liquidity: t.liquidity, volume: d?.volume ?? null, netflow: d?.netflow ?? null, price_change: d?.price_change ?? null };
+  });
 
   // Per planet: holders, PnL leaderboard, 24h buyers and sellers, transfers,
   // cohort flows and Nansen's indicators.
@@ -237,6 +277,7 @@ async function build(): Promise<Galaxy> {
     return {
       address: a,
       symbol: r.token_symbol.replace(/^\s*⚠️?\s*/, ''),
+      name: r.name,
       marketCap: r.market_cap_usd ?? null,
       liquidity: r.liquidity ?? null,
       volume24h: r.volume ?? null,
@@ -259,28 +300,26 @@ async function build(): Promise<Galaxy> {
     };
   });
 
-  return { builtAt: now.toISOString(), planets, stars, trails, credits, endpoints, errors };
+  return { universe, builtAt: now.toISOString(), planets, stars, trails, credits, endpoints, errors };
 }
 
-// A galaxy costs a few hundred credits, so it is kept for three hours and
+// A galaxy costs a few hundred credits, so each universe is kept for three hours and
 // written to disk: restarting the server does not rebuild it.
 const TTL = 3 * 60 * 60_000;
-const DIR = process.env.GALAXY_CACHE_DIR ?? (process.env.VERCEL ? '/tmp' : '.cache');
-const FILE = path.join(DIR, 'galaxy.json');
 
-async function fromDisk(): Promise<Galaxy | null> {
+async function fromDisk(universe: UniverseId): Promise<Galaxy | null> {
   try {
-    const g = JSON.parse(await readFile(FILE, 'utf8')) as Galaxy;
+    const g = JSON.parse(await readFile(path.join(CACHE_DIR, `galaxy-${universe}.json`), 'utf8')) as Galaxy;
     return Date.now() - Date.parse(g.builtAt) < TTL ? g : null;
   } catch { return null; }
 }
 
-export const getGalaxy = () => cached('galaxy', TTL, async () => {
-  const disk = await fromDisk();
+export const getGalaxy = (universe: UniverseId = 'majors') => cached(`galaxy-${universe}`, TTL, async () => {
+  const disk = await fromDisk(universe);
   if (disk) return disk;
-  const g = await build();
+  const g = await build(universe);
   if (g.planets.length) {
-    try { await mkdir(DIR, { recursive: true }); await writeFile(FILE, JSON.stringify(g)); } catch { /* read-only fs */ }
+    try { await mkdir(CACHE_DIR, { recursive: true }); await writeFile(path.join(CACHE_DIR, `galaxy-${universe}.json`), JSON.stringify(g)); } catch { /* read-only fs */ }
   }
   return g;
 });

@@ -6,6 +6,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { cached, nansen, pool } from './nansen';
 import { clean, getGalaxy, type Galaxy } from './galaxy';
+import type { UniverseId } from './universes';
 
 export interface Cluster {
   id: string;
@@ -54,8 +55,8 @@ async function loadFunders(): Promise<FunderCache> {
   try { return JSON.parse(await readFile(FUNDERS_FILE, 'utf8')) as FunderCache; } catch { return {}; }
 }
 
-async function build(): Promise<ClusterReport> {
-  const galaxy: Galaxy = await getGalaxy();
+async function build(universe: UniverseId): Promise<ClusterReport> {
+  const galaxy: Galaxy = await getGalaxy(universe);
   const funders = await loadFunders();
   let credits = 0;
 
@@ -174,4 +175,4 @@ async function build(): Promise<ClusterReport> {
   return { builtAt: new Date().toISOString(), galaxyBuiltAt: galaxy.builtAt, clusters, checked: wallets.length, credits };
 }
 
-export const getClusters = () => cached('clusters', TTL, build);
+export const getClusters = (universe: UniverseId = 'majors') => cached(`clusters-${universe}`, TTL, () => build(universe));

@@ -18,6 +18,7 @@ import { keccak256, toUtf8Bytes } from 'ethers';
 import { cached } from './nansen';
 import { getGalaxy, type StarKind } from './galaxy';
 import { getClusters } from './clusters';
+import type { UniverseId } from './universes';
 
 export const METHODOLOGY = 'nansen-rep-v1';
 
@@ -32,8 +33,8 @@ export function tierOf(score: number, flags: number): Tier {
   return score >= 750 ? 'Proven' : score >= 550 ? 'Trusted' : score >= 300 ? 'Known' : 'Unproven';
 }
 
-async function build(): Promise<ReputationSet> {
-  const [galaxy, clusters] = await Promise.all([getGalaxy(), getClusters()]);
+async function build(universe: UniverseId): Promise<ReputationSet> {
+  const [galaxy, clusters] = await Promise.all([getGalaxy(universe), getClusters(universe)]);
   const insiders = new Set<number>();
   const funders = new Set<number>();
   for (const c of clusters.clusters) {
@@ -80,4 +81,4 @@ async function build(): Promise<ReputationSet> {
   };
 }
 
-export const getReputation = () => cached('reputation', 30 * 60_000, build);
+export const getReputation = (universe: UniverseId = 'majors') => cached(`reputation-${universe}`, 30 * 60_000, () => build(universe));

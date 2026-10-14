@@ -377,3 +377,13 @@ kbd {
 .near.station.dock { border-color: rgba(0,255,167,0.6); }
 .near.station .dock-btn { display: inline-flex; gap: 8px; align-items: center; margin-top: 6px; padding: 7px 12px; border-radius: 999px; font-weight: 600; font-size: 12px; text-decoration: none; color: #04110f; background: #00ffa7; }
 .near.station .dock-btn kbd { color: #04110f; border-color: rgba(4,17,15,0.4); }
+
+/* Universe switcher on the Constellation page. */
+.universes { position: absolute; right: 18px; top: 18px; z-index: 6; display: flex; flex-direction: column; gap: 6px; align-items: flex-end; max-width: 250px; text-align: right; pointer-events: auto; }
+.universes button { display: flex; align-items: center; gap: 8px; padding: 7px 12px; border-radius: 999px; cursor: pointer; font: 600 12px Inter, system-ui, sans-serif; color: #e8e4ff; background: rgba(10,7,24,0.62); border: 1px solid rgba(160,140,255,0.25); backdrop-filter: blur(8px); }
+.universes button i { width: 9px; height: 9px; border-radius: 50%; background: var(--u); box-shadow: 0 0 10px var(--u); }
+.universes button em { font-style: normal; color: #8f88b8; font-size: 11px; }
+.universes button.on { border-color: var(--u); background: rgba(30,24,60,0.8); }
+.universes button:hover { border-color: var(--u); }
+.universes p { margin: 4px 4px 0; font-size: 11px; line-height: 1.45; color: #a79bd8; }
+.universes p span { display: block; margin-top: 3px; color: #6f679a; }

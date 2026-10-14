@@ -9,6 +9,7 @@ import type { Timeline, TradeEvent } from '@/lib/timeline';
 import { money } from '@/components/Dossier';
 import { PlanetView, RegistryPanel, ReputationCard, StarView, type OnChain } from '@/components/Dossier';
 import type { ReputationSet } from '@/lib/repFlags';
+import { UNIVERSES, universeDef, type UniverseId } from '@/lib/universes';
 import { KIND, type FlightHud, type Focus, type GalaxyHandle, type ReplayState, type Tie } from '@/components/GalaxyScene';
 
 const GalaxyScene = dynamic(() => import('@/components/GalaxyScene'), { ssr: false });
@@ -39,18 +40,44 @@ export default function Page() {
   const [wallets, setWallets] = useState<Record<string, WalletProfile | null | undefined>>({});
   const [tokens, setTokens] = useState<Record<string, TokenProfile | null | undefined>>({});
 
+  // Which universe: ?universe=, else the one a ?fly=<token> belongs to, else Majors. Counts come from /api/universes.
+  const [universe, setUniverse] = useState<UniverseId | null>(null);
+  const [tokenCounts, setTokenCounts] = useState<Record<string, number>>({});
   useEffect(() => {
-    fetch('/api/galaxy').then(async (r) => {
+    const q = new URLSearchParams(window.location.search);
+    const asked = q.get('universe'), fly = q.get('fly')?.toLowerCase();
+    const valid = (x: string | null | undefined): x is UniverseId => !!x && UNIVERSES.some((u) => u.id === x);
+    fetch('/api/universes').then((r) => r.ok ? r.json() : null).then((idx: { universes: { id: UniverseId; tokens: { address: string }[] }[] } | null) => {
+      if (idx) setTokenCounts(Object.fromEntries(idx.universes.map((u) => [u.id, u.tokens.length])));
+      const home = valid(asked) ? asked : fly ? idx?.universes.find((u) => u.tokens.some((t) => t.address === fly))?.id : undefined;
+      setUniverse(home ?? 'majors');
+    }).catch(() => setUniverse(valid(asked) ? asked : 'majors'));
+  }, []);
+
+  // Each universe is its own galaxy, built from its tokens.
+  useEffect(() => {
+    if (!universe) return;
+    let dead = false;
+    setGalaxy(null); setError(null); setSelected(null); setHover(null); setReport(null); setTimeline(null); setRepSet(null); setWallets({}); setTokens({});
+    fetch(`/api/galaxy?u=${universe}`).then(async (r) => {
       const j = await r.json();
+      if (dead) return;
       if (!r.ok) throw new Error(j.message ?? 'The galaxy could not be built.');
       setGalaxy(j);
-      setTimeout(() => setIntroDone(true), 3800);
+      setTimeout(() => !dead && setIntroDone(true), 3800);
       // Tracing first funders is slower than the galaxy, so it follows it.
-      fetch('/api/clusters').then((r) => r.ok ? r.json() : null).then((c) => c && setReport(c)).catch(() => {});
-      fetch('/api/timeline').then((r) => r.ok ? r.json() : null).then((t) => t && setTimeline(t)).catch(() => {});
-      fetch('/api/reputation').then((r) => r.ok ? r.json() : null).then((x) => x && setRepSet(x)).catch(() => {});
-    }).catch((e) => setError(e.message));
-  }, []);
+      fetch(`/api/clusters?u=${universe}`).then((r) => r.ok ? r.json() : null).then((c) => !dead && c && setReport(c)).catch(() => {});
+      fetch(`/api/timeline?u=${universe}`).then((r) => r.ok ? r.json() : null).then((t) => !dead && t && setTimeline(t)).catch(() => {});
+      fetch(`/api/reputation?u=${universe}`).then((r) => r.ok ? r.json() : null).then((x) => !dead && x && setRepSet(x)).catch(() => {});
+    }).catch((e) => !dead && setError(e.message));
+    return () => { dead = true; };
+  }, [universe]);
+  const switchUniverse = useCallback((u: UniverseId) => {
+    if (u === universe) return;
+    if (flying) { setFlying(false); setHud(null); }
+    window.history.replaceState(null, '', `/galaxy?universe=${u}`);
+    setUniverse(u);
+  }, [universe, flying]);
 
   // Selecting flies to it; closing a dossier leaves the camera where it is.
   const select = useCallback((f: Focus) => {
@@ -192,7 +219,7 @@ export default function Page() {
 
   return (
     <main>
-      {galaxy && <GalaxyScene ref={scene} galaxy={galaxy} focus={selected ?? hover} onHover={setHover} onSelect={select} onFlight={setHud} ties={ties} clusters={report?.clusters}
+      {galaxy && <GalaxyScene key={galaxy.universe} ref={scene} galaxy={galaxy} focus={selected ?? hover} onHover={setHover} onSelect={select} onFlight={setHud} ties={ties} clusters={report?.clusters}
         timeline={timeline} onReplay={setRep} onTrade={onTrade} />}
 
       <a className="to-station" href={homeHref} title="Dock back at the orbital station">← Station</a>
@@ -206,9 +233,18 @@ export default function Page() {
         {!introDone && <p>Every wallet a star. Every token a planet. Built from Nansen.</p>}
       </header>
 
+      <nav className="universes" aria-label="Universes">
+        {UNIVERSES.map((u) => (
+          <button key={u.id} className={universe === u.id ? 'on' : ''} style={{ ['--u' as string]: u.color }} onClick={() => switchUniverse(u.id)} title={u.blurb}>
+            <i /><b>{u.name}</b><em>{tokenCounts[u.id] ?? ''}</em>
+          </button>
+        ))}
+        {universe && <p>{universeDef(universe)?.blurb} <span>Category assigned by this app from each token’s Nansen name; data from Nansen.</span></p>}
+      </nav>
+
       {!galaxy && (
         <div className="loading">
-          {error ? <p className="err">{error}</p> : <p>Charting Monad from Nansen…</p>}
+          {error ? <p className="err">{error}</p> : <p>Charting the {universe ? universeDef(universe)?.name : 'Monad'} universe from Nansen…<br /><small>A universe’s first build takes about a minute; after that it is kept for three hours.</small></p>}
         </div>
       )}
 

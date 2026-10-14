@@ -4,7 +4,7 @@ import type { Engine } from '../engine';
 import type { Telescope, TelescopeHud } from '../modes/telescope';
 
 const KIND_LABEL: Record<string, string> = {
-  token: 'Monad token world', earth: 'Planet · home', moon: 'Natural satellite', sun: 'Star · G2V', planet: 'Planet', star: 'Star', nebula: 'Emission nebula',
+  universe: 'Monad universe', token: 'Monad token world', earth: 'Planet · home', moon: 'Natural satellite', sun: 'Star · G2V', planet: 'Planet', star: 'Star', nebula: 'Emission nebula',
   'dark-nebula': 'Dark nebula', 'open-cluster': 'Open cluster', globular: 'Globular cluster', spiral: 'Spiral galaxy',
   elliptical: 'Elliptical galaxy', interacting: 'Interacting galaxies', group: 'Galaxy group', cluster: 'Galaxy cluster',
   'deep-field': 'Deep field', 'black-hole': 'Black hole', remnant: 'Supernova remnant',

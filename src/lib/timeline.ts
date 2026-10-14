@@ -10,6 +10,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { cached, nansen, pool } from './nansen';
 import { clean, getGalaxy, kindOf, type StarKind } from './galaxy';
+import type { UniverseId } from './universes';
 
 /** One trade: compact keys, because a day is several thousand of them. */
 export interface TradeEvent {
@@ -45,13 +46,13 @@ interface Row {
 }
 
 const DIR = process.env.GALAXY_CACHE_DIR ?? (process.env.VERCEL ? '/tmp' : '.cache');
-const FILE = path.join(DIR, 'timeline.json');
+const fileFor = (u: UniverseId) => path.join(DIR, `timeline-${u}.json`);
 const TTL = 60 * 60_000;
 const HOUR = 3_600_000;
 const MIN_USD = 5;
 
-async function build(): Promise<Timeline> {
-  const galaxy = await getGalaxy();
+async function build(universe: UniverseId): Promise<Timeline> {
+  const galaxy = await getGalaxy(universe);
   // Nansen's trade index runs a few hours behind; end the day at the newest
   // transfer the galaxy saw so the replay does not trail off into silence.
   const newest = Math.max(...galaxy.trails.map((t) => Date.parse(t.at)).filter(Number.isFinite), Date.now() - 3 * HOUR);
@@ -120,12 +121,12 @@ async function build(): Promise<Timeline> {
   return { builtAt: new Date().toISOString(), start, end, events, transfers, hours, sampled, credits };
 }
 
-export const getTimeline = () => cached('timeline', TTL, async () => {
+export const getTimeline = (universe: UniverseId = 'majors') => cached(`timeline-${universe}`, TTL, async () => {
   try {
-    const t = JSON.parse(await readFile(FILE, 'utf8')) as Timeline;
+    const t = JSON.parse(await readFile(fileFor(universe), 'utf8')) as Timeline;
     if (Date.now() - Date.parse(t.builtAt) < TTL) return t;
   } catch { /* not cached yet */ }
-  const t = await build();
-  try { await mkdir(DIR, { recursive: true }); await writeFile(FILE, JSON.stringify(t)); } catch { /* read-only fs */ }
+  const t = await build(universe);
+  try { await mkdir(DIR, { recursive: true }); await writeFile(fileFor(universe), JSON.stringify(t)); } catch { /* read-only fs */ }
   return t;
 });

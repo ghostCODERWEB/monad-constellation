@@ -208,3 +208,12 @@
 .st-dock .st-seg button:first-child { border: 0; color: inherit; }
 .st-dock .st-seg button.on:first-child { color: #fff; }
 .st-seg kbd { font-size: 10px; margin-left: 4px; }
+
+.shuttle-unis { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 16px 8px; }
+.shuttle-unis button { padding: 4px 10px; border-radius: 999px; cursor: pointer; font: 600 11px Inter, system-ui, sans-serif; color: #cfc8ee; background: transparent; border: 1px solid rgba(160,140,255,0.28); }
+.shuttle-unis button.on { background: var(--u, #836ef9); border-color: var(--u, #836ef9); color: #0b0618; }
+
+.pc-unis { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding: 6px 14px; border-bottom: 1px solid rgba(0,255,167,0.12); }
+.pc-unis button { padding: 4px 11px; border-radius: 999px; cursor: pointer; font: 600 11.5px Inter, sans-serif; color: #9fd8c3; background: none; border: 1px solid rgba(0,255,167,0.2); }
+.pc-unis button.on { background: var(--u, #00ffa7); border-color: var(--u, #00ffa7); color: #04110f; }
+.pc-unis span { margin-left: auto; font-size: 10.5px; color: #587a70; }

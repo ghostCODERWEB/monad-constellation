@@ -10,6 +10,7 @@ import * as THREE from 'three';
 import { buildMoon, buildSun, buildWorld, type World } from '@/components/worlds';
 import type { WorldStyle } from '@/lib/worldStyle';
 import { buildGalaxyField, type GalaxyField } from './galaxyField';
+import { UNIVERSES } from '@/lib/universes';
 
 export const EARTH_R = 6371;
 export const ALTITUDE = 420;
@@ -38,8 +39,8 @@ export interface Sky {
   /** The Earth's frame: rotating it carries the ground beneath the station. */
   earthPivot: THREE.Group;
   moon: THREE.Mesh;
-  /** The distant Monad universe, fixed in the station frame, in view through the observation room's great window. */
-  monad: GalaxyField;
+  /** The Monad universes (one galaxy per token category), fixed in the station frame; Majors sits in the observation room's great window. */
+  monads: GalaxyField[];
   sun: ReturnType<typeof buildSun>;
   sunPos: { value: THREE.Vector3 };
   /** Unit vector from the station toward the Sun, in station space. */
@@ -89,8 +90,8 @@ export function buildSky(): Sky {
   scene.add(inertial);
   inertial.add(new THREE.Points(sg, new THREE.PointsMaterial({ size: 1.8, sizeAttenuation: false, vertexColors: true, map: soft(), transparent: true, depthWrite: false })));
 
-  const monad = buildGalaxyField(120_000);
-  scene.add(monad.group);
+  const monads = UNIVERSES.map((u) => buildGalaxyField(120_000, u.id));
+  for (const m of monads) scene.add(m.group);
 
   // Sun and Moon: placed to show their true apparent sizes (about half a degree).
   const sunPos = { value: new THREE.Vector3() };
@@ -114,7 +115,7 @@ export function buildSky(): Sky {
   const sunDir = new THREE.Vector3();
   const sunBase = new THREE.Vector3(0.92, 0, 0.39).normalize();
   const sky: Sky = {
-    scene, inertial, phase: 0, sunBase, camera, earth, earthPivot, moon, monad, sun, sunPos, sunDir, sunlit: 1, earthDay: 1,
+    scene, inertial, phase: 0, sunBase, camera, earth, earthPivot, moon, monads, sun, sunPos, sunDir, sunlit: 1, earthDay: 1,
     update(t, camQuat, aspect, fov) {
       // The orbit: the Sun swings round the station once per orbit, and the
       // ground beneath slides past at the same rate.
@@ -140,7 +141,7 @@ export function buildSky(): Sky {
       for (const m of [earth.surfaceMat, earth.cloudMat]) m.uniforms.uTime.value = t;
       earth.atmoMat.side = THREE.FrontSide;
       sun.mat.uniforms.uTime.value = t;
-      monad.update(t);
+      for (const m of monads) m.update(t);
       camera.quaternion.copy(camQuat);
       camera.aspect = aspect;
       camera.fov = fov;

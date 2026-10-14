@@ -7,6 +7,7 @@
 // C catalog, E or Esc back to zero-g. Gamepad: sticks aim, triggers zoom,
 // bumpers unused, X track, Y exit.
 import * as THREE from 'three';
+import type { Galaxy } from '@/lib/galaxy';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 import { glassSmudge, normalFromHeight, pbrSet, scaleUV } from '../world/pbr';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
@@ -83,9 +84,20 @@ export function installTelescope(e: Engine) {
   // The catalog: the sky's fixed objects, then Monad's token worlds once the galaxy data arrives.
   const catalog: Target[] = [...CATALOG];
   let tokensState: 'loading' | 'ready' | 'unavailable' = 'loading';
-  fetch('/api/galaxy').then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
-    .then((g) => { catalog.push(...cosmos.addTokens(g, e.sky.monad.load(g))); tokensState = 'ready'; })
-    .catch(() => { tokensState = 'unavailable'; });
+  // Every universe in turn (Majors first): each is its own galaxy in the sky, with its worlds in the catalog.
+  (async () => {
+    let any = false;
+    for (const field of e.sky.monads) {
+      try {
+        const r = await fetch(`/api/galaxy?u=${field.info.id}`);
+        if (!r.ok) continue;
+        const g = (await r.json()) as Galaxy;
+        catalog.push(cosmos.universeTarget(field.info, g), ...cosmos.addTokens(g, field.load(g), field.info.name));
+        any = true; tokensState = 'ready';
+      } catch { /* this universe is unavailable; the others still load */ }
+    }
+    if (!any) tokensState = 'unavailable';
+  })();
   const scopeCam = new THREE.PerspectiveCamera(BASE_FOV, 1, 1, 1e7);
   const skyCam = new THREE.PerspectiveCamera(BASE_FOV, 1, 1, 2e6);
 
@@ -296,7 +308,7 @@ export function installTelescope(e: Engine) {
     if (t.kind === 'earth') return out.set(0, -1, 0);
     if (t.kind === 'sun') return out.copy(e.sky.sunDir);
     if (t.kind === 'moon') return e.sky.moon.getWorldPosition(out).normalize();
-    if (t.kind === 'token') return out.copy(dirOf(t.lon, t.lat)); // the Monad universe is fixed in the station frame
+    if (t.kind === 'token' || t.kind === 'universe') return out.copy(dirOf(t.lon, t.lat)); // the Monad universes are fixed in the station frame
     return out.copy(dirOf(t.lon, t.lat)).applyAxisAngle(rotZ, e.sky.phase);
   };
 
@@ -389,7 +401,7 @@ export function installTelescope(e: Engine) {
       // Tracking: follow the inertial sky as the station turns.
       const dPhase = e.sky.phase - lastPhase;
       lastPhase = e.sky.phase;
-      if (tracking && !slew && current?.kind !== 'token') aimQ.premultiply(new THREE.Quaternion().setFromAxisAngle(rotZ, dPhase));
+      if (tracking && !slew && current?.kind !== 'token' && current?.kind !== 'universe') aimQ.premultiply(new THREE.Quaternion().setFromAxisAngle(rotZ, dPhase));
       // Zoom: damped and logarithmic.
       if (inp.wheel) magTarget *= Math.pow(1.25, -inp.wheel);
       if (inp.down('Equal', 'NumpadAdd') || inp.pad.buttons[PAD.RT]) magTarget *= Math.exp(1.6 * dt);
@@ -461,7 +473,7 @@ export function installTelescope(e: Engine) {
       // eyepiece it can go straight to the PC dossier or the flight planner.
       if (resolved && current?.token) {
         const tk = current.token;
-        e.setSubject({ kind: 'token', address: tk.address, label: `$${tk.symbol}`, source: 'telescope' });
+        e.setSubject({ kind: 'token', address: tk.address, label: `$${tk.symbol}`, source: 'telescope', universe: tk.universe });
         if (inp.hit('KeyP')) { e.setMode('pc'); return; }
         if (inp.hit('KeyB')) { e.setMode('shuttle'); return; }
       }

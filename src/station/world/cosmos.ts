@@ -10,9 +10,9 @@ import { NOISE, buildWorld, buildMoon, type World } from '@/components/worlds';
 import { worldStyle } from '@/lib/worldStyle';
 import { moonsOf } from '@/lib/moons';
 import type { Galaxy } from '@/lib/galaxy';
-import type { FieldWorld } from './galaxyField';
+import type { FieldInfo, FieldWorld } from './galaxyField';
 
-export type TargetKind = 'token' | 'planet' | 'star' | 'nebula' | 'dark-nebula' | 'open-cluster' | 'globular' | 'spiral' | 'elliptical'
+export type TargetKind = 'universe' | 'token' | 'planet' | 'star' | 'nebula' | 'dark-nebula' | 'open-cluster' | 'globular' | 'spiral' | 'elliptical'
   | 'interacting' | 'group' | 'cluster' | 'deep-field' | 'black-hole' | 'remnant' | 'earth' | 'moon' | 'sun';
 
 export interface Target {
@@ -30,7 +30,7 @@ export interface Target {
   facts: string[];
   simulated?: boolean;
   /** A Monad token world: its address and symbol. */
-  token?: { address: string; symbol: string; planet: number };
+  token?: { address: string; symbol: string; planet: number; universe?: string };
 }
 
 const as = (arcsec: number) => arcsec / 3600;
@@ -347,7 +347,9 @@ const RING_FS = /* glsl */ `
 
 export interface Cosmos {
   /** Catalog entries for the Monad token worlds, which the station sky already draws (world placement comes from the galaxy field). */
-  addTokens(galaxy: Galaxy, placed: FieldWorld[]): Target[];
+  addTokens(galaxy: Galaxy, placed: FieldWorld[], universeName: string): Target[];
+  /** The catalog entry for a whole universe, centred on its sun. */
+  universeTarget(info: FieldInfo, galaxy: Galaxy): Target;
   scene: THREE.Scene;
   /** Rotates with the inertial frame; everything on the sky is a child. */
   sky: THREE.Group;
@@ -523,7 +525,17 @@ export function buildCosmos(): Cosmos {
   const worlds: World[] = [];
   const money = (x: number | null) => x == null ? 'n/a' : x >= 1e9 ? `$${(x / 1e9).toFixed(2)}B` : x >= 1e6 ? `$${(x / 1e6).toFixed(2)}M` : x >= 1e3 ? `$${(x / 1e3).toFixed(1)}k` : `$${Math.round(x)}`;
 
-  const addTokens = (galaxy: Galaxy, placed: FieldWorld[]): Target[] => {
+  const universeTarget = (info: FieldInfo, galaxy: Galaxy): Target => ({
+    id: `universe-${info.id}`, name: `${info.name} universe`, kind: 'universe',
+    lon: THREE.MathUtils.radToDeg(Math.atan2(-info.dir.z, info.dir.x)), lat: THREE.MathUtils.radToDeg(Math.asin(info.dir.y)),
+    size: info.angularRadius * 2, distance: `Monad universe · ${galaxy.planets.length} token worlds`, focus: 0.7,
+    facts: [
+      `${galaxy.planets.length} Monad tokens in the ${info.name} category, each a world; ${galaxy.stars.length.toLocaleString()} wallets orbit them as stars.`,
+      'Built from Nansen token and holder data; the category is assigned by this app from each token’s Nansen name.',
+      'MON, the chain’s own star, burns at the heart of every universe. Zoom in to resolve the worlds.',
+    ],
+  });
+  const addTokens = (galaxy: Galaxy, placed: FieldWorld[], universeName: string): Target[] => {
     const out: Target[] = [];
     for (const fw of placed) {
       const p = galaxy.planets[fw.index];
@@ -532,8 +544,8 @@ export function buildCosmos(): Cosmos {
       const lon = THREE.MathUtils.radToDeg(Math.atan2(-fw.dir.z, fw.dir.x));
       const target: Target = {
         id: `token-${p.address}`, name: `$${p.symbol}`, kind: 'token', lon, lat, size: fw.sizeDeg,
-        distance: `Monad universe · ${style.biomeName} · far beyond the station`, focus: 0.62,
-        token: { address: p.address, symbol: p.symbol, planet: fw.index },
+        distance: `${universeName} universe · ${style.biomeName} · far beyond the station`, focus: 0.62,
+        token: { address: p.address, symbol: p.symbol, planet: fw.index, universe: fw.universe },
         facts: [
           `${style.biomeName}: ${style.why}`,
           `Market cap ${money(p.marketCap)} · liquidity ${money(p.liquidity)} · ${p.holders} holders in view (Nansen).`,
@@ -548,7 +560,7 @@ export function buildCosmos(): Cosmos {
 
   const tmpC = new THREE.Vector3();
   return {
-    scene, sky, targets, addTokens,
+    scene, sky, targets, addTokens, universeTarget,
     update(time, phase, sunDirInertial) {
       sky.rotation.z = phase;
       sky.updateMatrixWorld();

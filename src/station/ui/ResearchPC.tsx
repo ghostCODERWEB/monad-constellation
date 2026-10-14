@@ -16,6 +16,7 @@ import type { TokenProfile, WalletProfile } from '@/lib/profile';
 import { PlanetView, RegistryPanel, ReputationCard, StarView, money, signed } from '@/components/Dossier';
 import { KIND } from '@/components/GalaxyScene';
 import { askAgent } from './AgentPanel';
+import { UNIVERSES, type UniverseId } from '@/lib/universes';
 
 type Tab = 'tokens' | 'wallets' | 'radar' | 'reputation';
 type Sel = { type: 'planet' | 'star'; index: number } | null;
@@ -33,26 +34,43 @@ export function ResearchPC({ engine }: { engine: Engine }) {
   const [tokens, setTokens] = useState<Record<string, TokenProfile | null | undefined>>({});
   const [wallets, setWallets] = useState<Record<string, WalletProfile | null | undefined>>({});
 
+  // Which universe the terminal browses: the one the research subject belongs to, else Majors.
+  const [uni, setUni] = useState<UniverseId | null>(null);
   useEffect(() => {
-    fetch('/api/galaxy').then(async (r) => {
+    const subj = engine.subject;
+    if (subj?.universe && UNIVERSES.some((u) => u.id === subj.universe)) { setUni(subj.universe as UniverseId); return; }
+    if (!subj || subj.kind !== 'token') { setUni('majors'); return; }
+    fetch('/api/universes').then((r) => r.ok ? r.json() : null)
+      .then((idx: { universes: { id: UniverseId; tokens: { address: string }[] }[] } | null) => setUni(idx?.universes.find((u) => u.tokens.some((t) => t.address === subj.address.toLowerCase()))?.id ?? 'majors'))
+      .catch(() => setUni('majors'));
+    // The station subject is read once, when the PC opens.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const firstLoad = useRef(true);
+  useEffect(() => {
+    if (!uni) return;
+    let dead = false;
+    setGalaxy(null); setError(null); setReport(null); setRepSet(null); setSel(null); setTokens({}); setWallets({});
+    fetch(`/api/galaxy?u=${uni}`).then(async (r) => {
       const j = await r.json();
+      if (dead) return;
       if (!r.ok) throw new Error(j.message ?? 'Galaxy data unavailable.');
       setGalaxy(j);
-      // Open on whatever the crew is researching (a world just seen in the telescope, say).
+      // Open on whatever the crew is researching (a world just seen in the telescope, say), the first time.
       const subj = engine.subject;
-      if (subj) {
+      if (subj && firstLoad.current) {
         const g = j as Galaxy;
         const pi = g.planets.findIndex((p) => p.address.toLowerCase() === subj.address.toLowerCase());
         const si = pi < 0 ? g.stars.findIndex((w) => w.address.toLowerCase() === subj.address.toLowerCase()) : -1;
         if (pi >= 0) { setTab('tokens'); setSel({ type: 'planet', index: pi }); }
         else if (si >= 0) { setTab('wallets'); setSel({ type: 'star', index: si }); }
       }
-    }).catch((e) => setError(e.message));
-    fetch('/api/clusters').then((r) => r.ok ? r.json() : null).then(setReport).catch(() => {});
-    fetch('/api/reputation').then((r) => r.ok ? r.json() : null).then(setRepSet).catch(() => {});
-    // The station subject is read once, when the PC opens.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+      firstLoad.current = false;
+    }).catch((e) => !dead && setError(e.message));
+    fetch(`/api/clusters?u=${uni}`).then((r) => r.ok ? r.json() : null).then((x) => !dead && setReport(x)).catch(() => {});
+    fetch(`/api/reputation?u=${uni}`).then((r) => r.ok ? r.json() : null).then((x) => !dead && setRepSet(x)).catch(() => {});
+    return () => { dead = true; };
+  }, [uni, engine]);
 
   const addr = galaxy && sel ? (sel.type === 'planet' ? galaxy.planets[sel.index].address : galaxy.stars[sel.index].address) : null;
   useEffect(() => {
@@ -84,7 +102,7 @@ export function ResearchPC({ engine }: { engine: Engine }) {
   const pick = (t: Sel) => {
     setSel(t);
     if (!galaxy || !t) return;
-    if (t.type === 'planet') { const p = galaxy.planets[t.index]; engine.setSubject({ kind: 'token', address: p.address, label: `$${p.symbol}`, source: 'pc' }); }
+    if (t.type === 'planet') { const p = galaxy.planets[t.index]; engine.setSubject({ kind: 'token', address: p.address, label: `$${p.symbol}`, source: 'pc', universe: uni ?? undefined }); }
     else { const w = galaxy.stars[t.index]; engine.setSubject({ kind: 'wallet', address: w.address, label: w.name, source: 'pc' }); }
   };
   const close = () => engine.setMode('walk');
@@ -125,7 +143,7 @@ export function ResearchPC({ engine }: { engine: Engine }) {
     <section className="pc" aria-label="Research PC">
       <header>
         <img src="/brand/nansen-mark.gif" alt="" />
-        <div><b>NANSEN RESEARCH TERMINAL</b><span>Monad · data from Nansen{galaxy ? ` · built ${new Date(galaxy.builtAt).toUTCString().slice(17, 22)} UTC` : ''}</span></div>
+        <div><b>NANSEN RESEARCH TERMINAL</b><span>Monad{uni ? ` · ${UNIVERSES.find((u) => u.id === uni)?.name}` : ''} · data from Nansen{galaxy ? ` · built ${new Date(galaxy.builtAt).toUTCString().slice(17, 22)} UTC` : ''}</span></div>
         <nav>
           {(['tokens', 'wallets', 'radar', 'reputation'] as Tab[]).map((t) => (
             <button key={t} className={tab === t ? 'on' : ''} onClick={() => { setTab(t); setSel(null); }}>
@@ -135,6 +153,10 @@ export function ResearchPC({ engine }: { engine: Engine }) {
         </nav>
         <button className="agent-x" onClick={close} aria-label="Close">✕</button>
       </header>
+      <div className="pc-unis" role="group" aria-label="Universe">
+        {UNIVERSES.map((u) => <button key={u.id} className={uni === u.id ? 'on' : ''} style={{ ['--u' as string]: u.color }} onClick={() => setUni(u.id)}>{u.name}</button>)}
+        <span>Category assigned by this app from each token’s Nansen name</span>
+      </div>
 
       <div className="pc-body">
         <div className="pc-list">

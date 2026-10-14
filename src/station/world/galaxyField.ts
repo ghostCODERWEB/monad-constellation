@@ -9,16 +9,32 @@
 // shows each world's surface.
 import * as THREE from 'three';
 import { buildMoon, buildSun, buildWorld, type World } from '@/components/worlds';
+import { dirOf } from './cosmos';
 import { KIND } from '@/components/GalaxyScene';
 import { S, STAR_FS, STAR_VS, rng, type Orbit } from '@/components/galaxyShared';
 import { worldStyle } from '@/lib/worldStyle';
 import { moonsOf } from '@/lib/moons';
 import type { Galaxy } from '@/lib/galaxy';
+import { UNIVERSES, type UniverseId } from '@/lib/universes';
 
-/** Where the Monad universe sits: dead ahead through the great window, a little above the horizon. */
-export const MONAD_CENTER = new THREE.Vector3(1, 0.16, -0.08).normalize();
+/**
+ * Where each universe hangs in the sky (station frame: +x is the great window, longitude turns toward −z).
+ * Majors sits dead ahead; the others fan out either side, so the window shows a couple and the telescope can
+ * swing round to the rest.
+ */
+export const UNIVERSE_SKY: Record<UniverseId, { lon: number; lat: number; radius: number }> = {
+  majors: { lon: 4.5, lat: 9, radius: 17 },
+  rwa: { lon: 42, lat: 5, radius: 17 },
+  memes: { lon: -34, lat: 14, radius: 15 },
+  stables: { lon: 82, lat: 16, radius: 16 },
+  defi: { lon: -76, lat: 4, radius: 17 },
+};
+export const universeCenter = (u: UniverseId) => dirOf(UNIVERSE_SKY[u].lon, UNIVERSE_SKY[u].lat);
+
+export interface FieldInfo { id: UniverseId; name: string; color: string; dir: THREE.Vector3; angularRadius: number }
 
 export interface FieldWorld {
+  universe: UniverseId;
   /** Index into galaxy.planets. */
   index: number;
   /** World-space centre and radius in the sky scene. */
@@ -30,6 +46,7 @@ export interface FieldWorld {
 }
 
 export interface GalaxyField {
+  info: FieldInfo;
   group: THREE.Group;
   /** Build the galaxy from the Nansen data; returns where each world sits. Safe to call once. */
   load(galaxy: Galaxy): FieldWorld[];
@@ -37,7 +54,6 @@ export interface GalaxyField {
 }
 
 const GALAXY_RADIUS = 1000;          // the spiral's reach, in galaxy units
-const ANGULAR_RADIUS = 24;           // degrees the whole spiral spans from its centre
 const SUN_R = 30;
 
 function soft() {
@@ -49,13 +65,15 @@ function soft() {
   return new THREE.CanvasTexture(c);
 }
 
-export function buildGalaxyField(distance: number): GalaxyField {
+export function buildGalaxyField(distance: number, universe: UniverseId): GalaxyField {
   const group = new THREE.Group();
-  group.name = 'monad-universe';
-  const k = (distance * Math.tan(THREE.MathUtils.degToRad(ANGULAR_RADIUS))) / GALAXY_RADIUS; // metres of sky per galaxy unit
-  const C = MONAD_CENTER.clone().multiplyScalar(distance);
+  group.name = `universe-${universe}`;
+  const place = UNIVERSE_SKY[universe];
+  const dir0 = universeCenter(universe);
+  const k = (distance * Math.tan(THREE.MathUtils.degToRad(place.radius))) / GALAXY_RADIUS; // metres of sky per galaxy unit
+  const C = dir0.clone().multiplyScalar(distance);
   // Turn the galaxy so we look at it from above and in front, as the Constellation's opening view does.
-  const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0.5, 0.87).normalize(), MONAD_CENTER.clone().negate());
+  const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0.5, 0.87).normalize(), dir0.clone().negate());
   const toSky = (v: THREE.Vector3, out = new THREE.Vector3()) => out.copy(v).multiplyScalar(k).applyQuaternion(q).add(C);
 
   const sunPos = { value: C.clone() };
@@ -97,7 +115,7 @@ export function buildGalaxyField(distance: number): GalaxyField {
       worlds[pi] = w; spins[pi] = style.spin;
       fixed.add(w.group);
       const dir = center.clone().normalize();
-      out.push({ index: pi, center, radius: R, dir, sizeDeg: THREE.MathUtils.radToDeg(2 * Math.atan(R / center.length())) });
+      out.push({ universe, index: pi, center, radius: R, dir, sizeDeg: THREE.MathUtils.radToDeg(2 * Math.atan(R / center.length())) });
     });
 
     // Moons: each world's biggest real holders (same seeds as the Constellation).
@@ -203,5 +221,6 @@ export function buildGalaxyField(distance: number): GalaxyField {
     }
   };
 
-  return { group, load, update };
+  const def = UNIVERSES.find((u) => u.id === universe)!;
+  return { info: { id: universe, name: def.name, color: def.color, dir: dir0, angularRadius: place.radius }, group, load, update };
 }

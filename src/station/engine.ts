@@ -29,7 +29,7 @@ export interface Mode {
 }
 
 /** What the crew is researching right now: set by the telescope, the PC or a return flight, read by the robot and the shuttle. */
-export interface Subject { kind: 'token' | 'wallet'; address: string; label: string; source: 'telescope' | 'pc' | 'flight' }
+export interface Subject { kind: 'token' | 'wallet'; address: string; label: string; source: 'telescope' | 'pc' | 'flight'; /** The universe a token belongs to, when known. */ universe?: string }
 
 export interface EngineState {
   subject: Subject | null;
