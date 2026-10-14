@@ -41,12 +41,12 @@ export interface TokenProfile {
 const DIR = process.env.GALAXY_CACHE_DIR ?? (process.env.VERCEL ? '/tmp' : '.cache');
 const TTL = 60 * 60_000;
 
-async function diskCached<T extends { fetchedAt: string }>(key: string, make: () => Promise<T>): Promise<T> {
-  return cached(key, TTL, async () => {
+export async function diskCached<T extends { fetchedAt: string }>(key: string, make: () => Promise<T>, ttl = TTL): Promise<T> {
+  return cached(key, ttl, async () => {
     const file = path.join(DIR, `${key.replace(/[^a-z0-9:_-]/gi, '_')}.json`);
     try {
       const v = JSON.parse(await readFile(file, 'utf8')) as T;
-      if (Date.now() - Date.parse(v.fetchedAt) < TTL) return v;
+      if (Date.now() - Date.parse(v.fetchedAt) < ttl) return v;
     } catch { /* not cached yet */ }
     const v = await make();
     try { await mkdir(DIR, { recursive: true }); await writeFile(file, JSON.stringify(v)); } catch { /* read-only fs */ }

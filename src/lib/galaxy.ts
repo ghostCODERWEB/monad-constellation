@@ -96,7 +96,7 @@ export function kindOf(labels: string[], usd: number, smart: boolean): StarKind 
 export const clean = (label: string) => label.replace(/\s*\[0x[0-9a-f]+\]\s*$/i, '').replace(/[*​]/g, '').trim();
 
 interface ScreenerRow {
-  token_address: string; token_symbol: string; market_cap_usd?: number | null; liquidity?: number | null;
+  token_address: string; token_symbol: string; token_age_days?: number | null; market_cap_usd?: number | null; liquidity?: number | null;
   volume?: number | null; netflow?: number | null; price_change?: number | null;
 }
 interface Holding { token_address: string; token_symbol: string | null; value_usd: number; holders_count?: number | null }
@@ -109,7 +109,7 @@ interface SmartTrade { trader_address: string }
 
 const COHORT_KEYS = ['smart_trader', 'whale', 'top_pnl', 'public_figure', 'exchange', 'fresh_wallets'];
 
-export interface TokenMeta { address: string; symbol: string; name: string; marketCap: number | null; liquidity: number | null; category: UniverseId }
+export interface TokenMeta { address: string; symbol: string; name: string; marketCap: number | null; liquidity: number | null; ageDays: number | null; category: UniverseId }
 
 const INDEX_TTL = 24 * 60 * 60_000;
 const CACHE_DIR = process.env.GALAXY_CACHE_DIR ?? (process.env.VERCEL ? '/tmp' : '.cache');
@@ -137,7 +137,7 @@ export const getTokenIndex = () => cached('token-index', INDEX_TTL, async (): Pr
   const tokens: TokenMeta[] = rows.map((r, i) => {
     const symbol = r.token_symbol.replace(/^\s*⚠️?\s*/, '');
     const name = names[i] ?? symbol;
-    return { address: r.token_address.toLowerCase(), symbol, name, marketCap: r.market_cap_usd ?? null, liquidity: r.liquidity ?? null, category: categoryOf(symbol, name) };
+    return { address: r.token_address.toLowerCase(), symbol, name, marketCap: r.market_cap_usd ?? null, liquidity: r.liquidity ?? null, ageDays: r.token_age_days ?? null, category: categoryOf(symbol, name) };
   });
   if (tokens.length) { try { await mkdir(CACHE_DIR, { recursive: true }); await writeFile(file, JSON.stringify({ at: Date.now(), tokens })); } catch { /* read-only fs */ } }
   return tokens;

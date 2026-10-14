@@ -40,19 +40,22 @@ interface Related { address: string; address_label: string | null; relation: str
 const PER_PLANET = 12;
 const DIR = process.env.GALAXY_CACHE_DIR ?? (process.env.VERCEL ? '/tmp' : '.cache');
 const FUNDERS_FILE = path.join(DIR, 'funders.json');
-const FUNDER_TTL = 24 * 60 * 60_000;
+export const FUNDER_TTL = 24 * 60 * 60_000;
 const TTL = 3 * 60 * 60_000;
 
 // A shared funder that is an exchange, bridge, distributor or router says
 // nothing about who controls the wallets it funded.
-const NEUTRAL = /🏦|🤖|exchange|hot wallet|binance|coinbase|bybit|okx|kraken|bitget|kucoin|gate|mexc|htx|distributor|airdrop|bridge|router|relay|li\.fi|cctp|faucet|deployer: monad/i;
+export const NEUTRAL = /🏦|🤖|exchange|hot wallet|binance|coinbase|bybit|okx|kraken|bitget|kucoin|gate|mexc|htx|distributor|airdrop|bridge|router|relay|li\.fi|cctp|faucet|deployer: monad/i;
 
 const short = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
 
-type FunderCache = Record<string, { at: number; funder: { address: string; label: string } | null }>;
+export type FunderCache = Record<string, { at: number; funder: { address: string; label: string } | null }>;
 
-async function loadFunders(): Promise<FunderCache> {
+export async function loadFunders(): Promise<FunderCache> {
   try { return JSON.parse(await readFile(FUNDERS_FILE, 'utf8')) as FunderCache; } catch { return {}; }
+}
+export async function saveFunders(f: FunderCache) {
+  try { await mkdir(DIR, { recursive: true }); await writeFile(FUNDERS_FILE, JSON.stringify(f)); } catch { /* read-only fs */ }
 }
 
 async function build(universe: UniverseId): Promise<ClusterReport> {
